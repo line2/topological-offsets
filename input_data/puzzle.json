@@ -1,0 +1,9 @@
+{
+  "input": "puzzle.msh",
+  "tag_input": "puzzle_cut.msh",
+  "2d": true,
+  "distance": 0.04,
+  "side": "out",
+  "max_normal_deviation": 5,
+  "report": "puzzle_report.json"
+}

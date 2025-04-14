@@ -1,0 +1,55 @@
+#pragma once
+
+// clang-format off
+#include <fmt/ranges.h>
+#include <spdlog/spdlog.h>
+// clang-format on
+
+namespace wmtk {
+
+bool has_user_overloaded_logger_level();
+///
+/// Retrieves the current logger.
+///
+/// @return     A const reference to WildmeshToolkit's logger object.
+///
+spdlog::logger& logger();
+
+///
+/// Retrieves the logger for the optimization.
+///
+/// @return     A const reference to WildmeshToolkit's  optimization logger object.
+///
+spdlog::logger& opt_logger();
+
+///
+/// Setup a logger object to be used by WildmeshToolkit. Calling this function with other WildmeshToolkit function
+/// is not thread-safe.
+///
+/// @param[in]  logger  New logger object to be used by WildmeshToolkit. Ownership is shared with WildmeshToolkit.
+///
+void set_logger(std::shared_ptr<spdlog::logger> logger);
+
+///
+/// Add a file logger to the current logger.
+///
+/// @param[in]  log_file  All output will be written to that file additionally to the already existing output.
+///
+void set_file_logger(const std::string& log_file);
+
+///
+/// Setup a logger object to be used by WildmeshToolkit optimization. Calling this function with other WildmeshToolkit function
+/// is not thread-safe.
+///
+/// @param[in]  logger  New logger object to be used by WildmeshToolkit logger. Ownership is shared with WildmeshToolkit.
+///
+void set_opt_logger(std::shared_ptr<spdlog::logger> logger);
+
+[[noreturn]] void log_and_throw_error(const std::string& msg);
+
+template <typename... Args>
+[[noreturn]] void log_and_throw_error(const std::string& msg, const Args&... args)
+{
+    log_and_throw_error(fmt::format(fmt::runtime(msg), args...));
+}
+} // namespace wmtk

@@ -1,0 +1,6 @@
+{
+  "input": "fertility.msh",
+  "distance": 0.08,
+  "finite_offset": true,
+  "report": "fertility_finite_report.json"
+}

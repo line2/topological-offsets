@@ -1,0 +1,10 @@
+{
+  "input": "hello_world.msh",
+  "tag_input": "hello_world_cut.msh",
+  "2d": true,
+  "distance": 0.05,
+  "side": "out",
+  "finite_offset": false,
+  "max_normal_deviation": 5,
+  "report": "hello_world_report.json"
+}

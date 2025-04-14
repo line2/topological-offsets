@@ -1,0 +1,71 @@
+set(SRC_FILES
+    Simplex.cpp
+    Simplex.hpp
+
+    IdSimplex.hpp
+    IdSimplex.cpp
+
+    NavigatableSimplex.hpp
+    NavigatableSimplex.cpp
+
+
+    SimplexCollection.hpp
+    SimplexCollection.cpp
+    IdSimplexCollection.hpp
+    IdSimplexCollection.cpp
+    RawSimplex.cpp
+    RawSimplex.hpp
+    RawSimplexCollection.hpp
+    RawSimplexCollection.cpp
+    closed_star.hpp
+    closed_star.cpp
+    closed_star_iterable.hpp
+    closed_star_iterable.cpp
+    half_closed_star_iterable.hpp
+    half_closed_star_iterable.cpp
+    top_dimension_cofaces.hpp
+    top_dimension_cofaces.cpp
+    top_dimension_cofaces_iterable.hpp
+    top_dimension_cofaces_iterable.cpp
+    cofaces_in_simplex_iterable.hpp
+    cofaces_in_simplex_iterable.cpp
+    cofaces_single_dimension.hpp
+    cofaces_single_dimension.cpp
+    cofaces_single_dimension_iterable.hpp
+    cofaces_single_dimension_iterable.cpp
+    link.hpp
+    link.cpp
+    link_single_dimension.hpp
+    link_single_dimension.cpp
+    link_single_dimension_iterable.hpp
+    link_single_dimension_iterable.cpp
+    link_condition.hpp
+    link_condition.cpp
+    link_iterable.hpp
+    link_iterable.cpp
+    open_star.hpp
+    open_star.cpp
+    open_star_iterable.hpp
+    open_star_iterable.cpp
+    faces.hpp
+    faces.cpp
+    faces_iterable.hpp
+    faces_iterable.cpp
+    internal/SimplexEqualFunctor.hpp
+    internal/SimplexLessFunctor.hpp
+    boundary.hpp
+    boundary.cpp
+    faces_single_dimension.hpp
+    faces_single_dimension.cpp
+    k_ring.hpp
+    k_ring.cpp
+    tuples_preserving_primitive_types.hpp
+    tuples_preserving_primitive_types.cpp
+
+    neighbors_single_dimension.hpp
+    neighbors_single_dimension.cpp
+)
+target_sources(wildmeshing_toolkit PRIVATE ${SRC_FILES})
+add_subdirectory(utils)
+add_subdirectory(internal)
+add_subdirectory(iterable)
