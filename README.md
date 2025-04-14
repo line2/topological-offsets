@@ -1,3 +1,7 @@
+# Topological Offsets
+
+![Topological Offsets teaser](/figs/topological_offsets_teaser.png)
+
 ## Installation
 
 - Compile the code using cmake>3.20.0
