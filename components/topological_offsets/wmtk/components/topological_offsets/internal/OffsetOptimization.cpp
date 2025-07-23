@@ -1418,6 +1418,11 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
         operations::SplitRibBasicStrategy::Mean);
     split->set_new_attribute_strategy(m_tet_tag_handle);
     split->set_new_attribute_strategy(m_embedding_roi_attribute);
+    if (m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+        m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
+        auto img_tag = m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron);
+        split->set_new_attribute_strategy(img_tag);
+    }
     for (const auto& attr : none_attributes) {
         split->set_new_attribute_strategy(
             attr,
@@ -1495,6 +1500,11 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
     collapse->set_new_attribute_strategy(m_embedding_target_edge_length_attribute);
     collapse->set_new_attribute_strategy(m_tet_tag_handle);
     collapse->set_new_attribute_strategy(m_embedding_roi_attribute);
+    if (m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+        m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
+        auto img_tag = m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron);
+        collapse->set_new_attribute_strategy(img_tag);
+    }
     for (const auto& attr : none_attributes) {
         collapse->set_new_attribute_strategy(attr, operations::CollapseBasicStrategy::None);
     }
@@ -1526,6 +1536,12 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
             operations::CollapseBasicStrategy::Mean);
         collapse.set_new_attribute_strategy(m_tet_tag_handle);
         collapse.set_new_attribute_strategy(m_embedding_roi_attribute);
+        if (m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+            m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
+            auto img_tag =
+                m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron);
+            collapse.set_new_attribute_strategy(img_tag);
+        }
         for (const auto& attr : none_attributes) {
             collapse.set_new_attribute_strategy(attr, operations::CollapseBasicStrategy::None);
         }
@@ -1537,6 +1553,12 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
             operations::SplitRibBasicStrategy::Mean);
         split.set_new_attribute_strategy(m_tet_tag_handle);
         split.set_new_attribute_strategy(m_embedding_roi_attribute);
+        if (m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+            m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
+            auto img_tag =
+                m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron);
+            split.set_new_attribute_strategy(img_tag);
+        }
         for (const auto& attr : none_attributes) {
             split.set_new_attribute_strategy(
                 attr,
@@ -1943,6 +1965,12 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
             operations::SplitBasicStrategy::Copy,
             operations::SplitRibBasicStrategy::Mean);
         split->set_new_attribute_strategy(m_tet_tag_handle);
+        if (m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+            m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
+            auto img_tag =
+                m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron);
+            split->set_new_attribute_strategy(img_tag);
+        }
         for (const auto& attr : none_attributes) {
             split->set_new_attribute_strategy(
                 attr,
@@ -2012,6 +2040,12 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
             m_offset_target_edge_length_attribute,
             operations::CollapseBasicStrategy::Mean);
         _collapse->set_new_attribute_strategy(m_tet_tag_handle);
+        if (m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+            m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
+            auto img_tag =
+                m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron);
+            _collapse->set_new_attribute_strategy(img_tag);
+        }
         for (const auto& attr : none_attributes) {
             _collapse->set_new_attribute_strategy(attr, operations::CollapseBasicStrategy::None);
         }
@@ -2063,6 +2097,12 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
                 operations::SplitBasicStrategy::Copy,
                 operations::SplitRibBasicStrategy::Mean);
             swap->split().set_new_attribute_strategy(m_tet_tag_handle);
+            if (m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+                m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
+                auto img_tag =
+                    m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron);
+                swap->split().set_new_attribute_strategy(img_tag);
+            }
             for (const auto& attr : none_attributes) {
                 swap->split().set_new_attribute_strategy(
                     attr,
@@ -2083,6 +2123,12 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
                 m_offset_target_edge_length_attribute,
                 operations::CollapseBasicStrategy::Mean);
             swap->collapse().set_new_attribute_strategy(m_tet_tag_handle);
+            if (m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+                m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
+                auto img_tag =
+                    m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron);
+                swap->collapse().set_new_attribute_strategy(img_tag);
+            }
             for (const auto& attr : none_attributes) {
                 swap->collapse().set_new_attribute_strategy(
                     attr,

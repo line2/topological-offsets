@@ -12,6 +12,7 @@ nlohmann::json topological_offsets_spec = R"(
       "2d",
       "output",
       "tag_input",
+      "tag_attribute",
       "finite_offset",
       "passes",
       "embedding_passes",
@@ -69,6 +70,11 @@ nlohmann::json topological_offsets_spec = R"(
   },
   {
     "pointer": "/tag_input",
+    "type": "string",
+    "default": ""
+  },
+  {
+    "pointer": "/tag_attribute",
     "type": "string",
     "default": ""
   },

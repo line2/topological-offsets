@@ -158,61 +158,133 @@ int main(int argc, char* argv[])
     std::shared_ptr<Mesh> mesh_in;
     if (input_file.extension() == ".msh") {
         if (j["tag_input"] == "") {
-            logger().info("Expecting file to be from tetwild and containing the in_out "
-                          "attribute. Converting it into a tag");
-            mesh_in = components::input::input(input_file, false, {"in_out"});
-            Mesh& mesh = *mesh_in;
+            const std::string tag_attribute_name = j["tag_attribute"];
+            if (tag_attribute_name.empty()) {
+                logger().info("Expecting file to be from tetwild and containing the in_out "
+                              "attribute. Converting it into a tag");
+                mesh_in = components::input::input(input_file, false, {"in_out"});
+                Mesh& mesh = *mesh_in;
 
-            auto in_out_handle =
-                mesh.get_attribute_handle<double>("in_out", PrimitiveType::Tetrahedron);
-            auto in_out_acc = mesh.create_accessor<double>(in_out_handle);
+                auto in_out_handle =
+                    mesh.get_attribute_handle<double>("in_out", PrimitiveType::Tetrahedron);
+                auto in_out_acc = mesh.create_accessor<double>(in_out_handle);
 
-            tag_handles[mesh.top_simplex_type()] = mesh.register_attribute<int64_t>(
-                tag_attr_names[mesh.top_simplex_type()],
-                mesh.top_simplex_type(),
-                1,
-                false,
-                embedding_tag);
-            auto tag_acc = mesh.create_accessor<int64_t>(tag_handles[mesh.top_simplex_type()]);
+                tag_handles[mesh.top_simplex_type()] = mesh.register_attribute<int64_t>(
+                    tag_attr_names[mesh.top_simplex_type()],
+                    mesh.top_simplex_type(),
+                    1,
+                    false,
+                    embedding_tag);
+                auto tag_acc = mesh.create_accessor<int64_t>(tag_handles[mesh.top_simplex_type()]);
 
-            bool has_tag = false;
+                bool has_tag = false;
 
-            for (const Tuple& t : mesh.get_all(mesh.top_simplex_type())) {
-                if (in_out_acc.const_scalar_attribute(t) < 0.5) {
-                    tag_acc.scalar_attribute(t) = input_tag;
-                    has_tag = true;
-                }
-            }
-
-            if (!has_tag) {
-                logger().error("Cannot generate offset. Input tag not found.");
-                return WMTK_FAIL;
-            }
-
-            // check if boundary tets are tagged
-            for (const Tuple& t : mesh.get_all(PrimitiveType::Tetrahedron)) {
-                const simplex::Simplex tet(mesh, PrimitiveType::Tetrahedron, t);
-
-                if (tag_acc.const_scalar_attribute(tet) != 1) {
-                    continue;
-                }
-
-                bool tet_is_boundary = false;
-                const auto vertices =
-                    simplex::faces_single_dimension(mesh, tet, PrimitiveType::Vertex);
-                for (const simplex::Simplex& v : vertices) {
-                    if (mesh.is_boundary(v)) {
-                        logger().error(
-                            "Cannot generate offset. Input contains tag at boundary tets.");
-                        return WMTK_FAIL;
+                for (const Tuple& t : mesh.get_all(mesh.top_simplex_type())) {
+                    if (in_out_acc.const_scalar_attribute(t) < 0.5) {
+                        tag_acc.scalar_attribute(t) = input_tag;
+                        has_tag = true;
                     }
                 }
+
+                if (!has_tag) {
+                    logger().error("Cannot generate offset. Input tag not found.");
+                    return WMTK_FAIL;
+                }
+
+                // check if boundary tets are tagged
+                for (const Tuple& t : mesh.get_all(PrimitiveType::Tetrahedron)) {
+                    const simplex::Simplex tet(mesh, PrimitiveType::Tetrahedron, t);
+
+                    if (tag_acc.const_scalar_attribute(tet) != input_tag) {
+                        continue;
+                    }
+
+                    bool tet_is_boundary = false;
+                    const auto vertices =
+                        simplex::faces_single_dimension(mesh, tet, PrimitiveType::Vertex);
+                    for (const simplex::Simplex& v : vertices) {
+                        if (mesh.is_boundary(v)) {
+                            logger().error(
+                                "Cannot generate offset. Input contains tag at boundary tets.");
+                            return WMTK_FAIL;
+                        }
+                    }
+                }
+
+
+                auto pos_handle =
+                    mesh_in->get_attribute_handle<double>(pos_attr_name, PrimitiveType::Vertex);
+                mesh.clear_attributes({tag_handles[mesh.top_simplex_type()], pos_handle});
+            } else {
+                mesh_in = components::input::input(input_file, false, {tag_attribute_name});
+                Mesh& mesh = *mesh_in;
+
+                if (mesh.top_simplex_type() != PrimitiveType::Tetrahedron) {
+                    log_and_throw_error("This part of the code was only written for tet meshes.");
+                }
+
+                auto tag_dbl_handle = mesh.get_attribute_handle<double>(
+                    tag_attribute_name,
+                    PrimitiveType::Tetrahedron);
+                auto tag_dbl_acc = mesh.create_accessor<double>(tag_dbl_handle);
+
+                tag_handles[PrimitiveType::Triangle] = mesh.register_attribute<int64_t>(
+                    tag_attr_names[PrimitiveType::Triangle],
+                    PrimitiveType::Triangle,
+                    1,
+                    false,
+                    embedding_tag);
+                auto tag_acc = mesh.create_accessor<int64_t>(tag_handles[PrimitiveType::Triangle]);
+
+                bool has_tag = false;
+
+                // tag all faces in between two different tet tags
+                for (const Tuple& t : mesh.get_all(PrimitiveType::Triangle)) {
+                    if (mesh.is_boundary(PrimitiveType::Triangle, t)) {
+                        continue;
+                    }
+                    const auto tag0 = tag_dbl_acc.const_scalar_attribute(t);
+                    const auto tag1 = tag_dbl_acc.const_scalar_attribute(
+                        mesh.switch_tuple(t, PrimitiveType::Tetrahedron));
+                    if (tag0 != tag1) {
+                        tag_acc.scalar_attribute(t) = input_tag;
+                        has_tag = true;
+                    }
+                }
+
+                if (!has_tag) {
+                    log_and_throw_error("Cannot generate offset. Input tag not found.");
+                }
+
+                // check if faces near boundary are tagged
+                for (const Tuple& t : mesh.get_all(PrimitiveType::Vertex)) {
+                    const simplex::Simplex v(mesh, PrimitiveType::Vertex, t);
+                    if (!mesh.is_boundary(v)) {
+                        continue;
+                    }
+                    const auto fs =
+                        simplex::faces_single_dimension_tuples(mesh, v, PrimitiveType::Triangle);
+                    for (const Tuple& f : fs) {
+                        if (tag_acc.scalar_attribute(f) == input_tag) {
+                            log_and_throw_error(
+                                "Cannot generate offset. Input contains tag at boundary.");
+                        }
+                    }
+                }
+
+                auto pos_handle =
+                    mesh_in->get_attribute_handle<double>(pos_attr_name, PrimitiveType::Vertex);
+
+                auto tag_int_handle =
+                    mesh.register_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron, 1);
+                auto tag_int_acc = mesh.create_accessor<int64_t>(tag_int_handle);
+                for (const Tuple& t : mesh.get_all(PrimitiveType::Tetrahedron)) {
+                    tag_int_acc.scalar_attribute(t) = tag_dbl_acc.scalar_attribute(t);
+                }
+
+                mesh.clear_attributes(
+                    {tag_handles[PrimitiveType::Triangle], pos_handle, tag_int_handle});
             }
-
-
-            auto pos_handle =
-                mesh_in->get_attribute_handle<double>(pos_attr_name, PrimitiveType::Vertex);
-            mesh.clear_attributes({tag_handles[mesh.top_simplex_type()], pos_handle});
         } else {
             logger().info("A tag input was given.");
 
@@ -342,11 +414,20 @@ int main(int argc, char* argv[])
         }
     }
 
-    mesh.clear_attributes({embedding_pos_handle});
+    std::vector<attribute::MeshAttributeHandle> keep_attributes;
+    keep_attributes.emplace_back(embedding_pos_handle);
+
+    if (mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
+        keep_attributes.emplace_back(
+            mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
+    }
+
+    mesh.clear_attributes(keep_attributes);
+    wmtk::components::output::output(mesh, "debug_test_0", embedding_pos_handle);
 
     // make child-mesh from boundary
     make_boundary_child_mesh(mesh_in);
-    mesh.clear_attributes({embedding_pos_handle});
+    mesh.clear_attributes(keep_attributes);
 
 
     std::shared_ptr<Mesh> input_mesh;
@@ -529,7 +610,75 @@ int main(int argc, char* argv[])
 
 
     // embedding output
-    {
+    if (mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+        mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
+        // tag offset as part of the embedding
+        auto img_tag = mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron);
+        auto img_tag_acc = mesh.create_accessor<int64_t>(img_tag);
+
+        const PrimitiveType pt_top = mesh.top_simplex_type();
+        const PrimitiveType pt_face = get_primitive_type_from_id(get_primitive_type_id(pt_top) - 1);
+
+        // flood fill all tets incident to input
+        for (const Tuple& f : input_mesh->get_all(PrimitiveType::Triangle)) {
+            const Tuple t =
+                input_mesh->map_to_parent_tuple(simplex::Simplex(PrimitiveType::Triangle, f));
+
+            std::vector<Tuple> q(200);
+            size_t q_front = 0;
+            size_t q_back = 0;
+
+            const Tuple t_opp = mesh.switch_tuple(t, PrimitiveType::Tetrahedron);
+
+            if (img_tag_acc.const_scalar_attribute(t) != embedding_tag) {
+                q[q_back++] = t;
+            }
+            if (img_tag_acc.const_scalar_attribute(t_opp) != embedding_tag) {
+                q[q_back++] = t_opp;
+            }
+
+            while (q_front != q_back) {
+                const Tuple q_tuple = q[q_front++];
+                const simplex::Simplex q_simplex(mesh, pt_top, q_tuple);
+
+                const auto faces = simplex::faces_single_dimension(mesh, q_simplex, pt_face);
+                for (const simplex::Simplex& face : faces) {
+                    if (mesh.is_boundary(face)) {
+                        continue; // should never be true as the offset must not touch the boundary
+                    }
+                    bool is_in_child = false;
+                    for (auto& child : mesh.get_all_child_meshes()) {
+                        if (mesh.simplex_is_in_child(*child, face)) {
+                            is_in_child = true;
+                            break;
+                        }
+                    }
+                    if (is_in_child) {
+                        continue;
+                    }
+
+                    const Tuple ts = mesh.switch_tuple(face.tuple(), pt_top);
+                    const simplex::Simplex ts_simplex(mesh, pt_top, ts);
+                    if (img_tag_acc.const_scalar_attribute(ts) == embedding_tag) {
+                        continue;
+                    }
+                    img_tag_acc.scalar_attribute(ts) = embedding_tag;
+                    if (q_back + 1 == q.size()) {
+                        q.resize(1.5 * q.size());
+                    }
+                    q[q_back++] = ts;
+                }
+            }
+        }
+
+        wmtk::components::output::output(
+            mesh,
+            fmt::format("{}_embedding", output_file.string()),
+            embedding_pos_handle);
+
+        // TODO MSH output
+
+    } else {
         // add tet tags
         logger().info("Add tet tags");
         const PrimitiveType pt_top = mesh.top_simplex_type();

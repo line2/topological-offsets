@@ -260,8 +260,15 @@ TopologicalOffsetsOutput topological_offsets(TopologicalOffsetsOptions options)
             top_simplex_tag_handle = tog.tag_offset_tets();
         }
 
-
-        mesh.clear_attributes({pos_handle, top_simplex_tag_handle});
+        if (mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+            mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
+            mesh.clear_attributes(
+                {pos_handle,
+                 top_simplex_tag_handle,
+                 mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron)});
+        } else {
+            mesh.clear_attributes({pos_handle, top_simplex_tag_handle});
+        }
 
         top_simplex_tag_handle = mesh.get_attribute_handle<int64_t>(
             "topological_offsets_top_simplex_tag",
