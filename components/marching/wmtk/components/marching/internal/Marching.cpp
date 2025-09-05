@@ -367,6 +367,108 @@ void Marching::process()
         }
     }
 
+    if (m_oracle) {
+        logger().info("Marching uses oracle");
+        // move vertices according to isovalue
+        auto pos_acc = m_mesh.create_accessor<double>(m_pos_handle);
+
+        for (const Tuple& v_tuple : m_mesh.get_all(PrimitiveType::Vertex)) {
+            const simplex::Simplex v(m_mesh, PrimitiveType::Vertex, v_tuple);
+
+            if (acc_vertex_tag.const_scalar_attribute(v) != m_output_value) {
+                continue;
+            }
+
+            const auto tets = simplex::top_dimension_cofaces_tuples(m_mesh, v);
+
+            // make sure that the current position is valid
+            if (!is_inversion_free(tets)) {
+                log_and_throw_error("Midpoint split im Marching component caused inversions.");
+            }
+
+            // get the two input positions
+            Tuple v0;
+            Tuple v1;
+            auto incident_edges =
+                simplex::cofaces_single_dimension_tuples(m_mesh, v, PrimitiveType::Edge);
+            for (Tuple e : incident_edges) {
+                if (acc_splitted_edges.const_scalar_attribute(e) == 0) {
+                    continue;
+                }
+                if (acc_vertex_tag.const_scalar_attribute(e) == m_output_value) {
+                    e = m_mesh.switch_tuple(e, PrimitiveType::Vertex);
+                }
+                if (acc_vertex_tag.const_scalar_attribute(e) == m_input_values[0]) {
+                    v0 = e;
+                }
+                if (m_input_values.size() == 2) {
+                    if (acc_vertex_tag.const_scalar_attribute(e) == m_input_values[1]) {
+                        v1 = e;
+                    }
+                } else {
+                    if (acc_vertex_tag.const_scalar_attribute(e) != m_input_values[0]) {
+                        v1 = e;
+                    }
+                }
+            }
+            assert(m_mesh.is_valid(v0));
+            assert(m_mesh.is_valid(v1));
+            Eigen::VectorXd p0 = pos_acc.const_vector_attribute(v0);
+            Eigen::VectorXd p1 = pos_acc.const_vector_attribute(v1);
+
+            auto p = pos_acc.vector_attribute(v);
+
+            const Eigen::VectorXd p_mid = p;
+
+            double u = 1. / m_oracle_samples; // step size
+
+            Eigen::VectorXd p_i = p0;
+            Eigen::VectorXd p_j;
+            for (int64_t depth = 0; depth < 4; ++depth) {
+                // find p_j with oracle(p_j) > isovalue
+                for (int64_t i = 1; i < m_oracle_samples + 1; ++i) {
+                    p_j = (1. - i * u) * p0 + i * u * p1;
+                    double val_j = m_oracle(p_j);
+                    if (val_j > m_isovalue) {
+                        break;
+                    }
+                }
+                p0 = p_i;
+                p1 = p_j;
+            }
+
+            p = 0.5 * (p0 + p1);
+            if (!is_inversion_free(tets)) {
+                log_and_throw_error("failed to step in marching");
+            }
+
+            const double sf0 = m_oracle(p0);
+            const double sf1 = m_oracle(p1);
+            if (sf0 > m_isovalue || sf1 < m_isovalue) {
+                continue;
+            }
+
+            // linear interpolation
+            u = (m_isovalue - sf0) / (sf1 - sf0);
+            p = (1. - u) * p0 + u * p1;
+            if (u < 0 || u > 1 || !is_inversion_free(tets)) {
+                // log_and_throw_error("failed to step in marching");
+                p = 0.5 * (p0 + p1);
+                if (!is_inversion_free(tets)) {
+                    logger().trace(
+                        "Failed to find a good position in marching. Falling back to midpoint.");
+                    p = p_mid;
+                }
+            }
+
+            if (p == p_mid) {
+                logger().trace(
+                    "Could not find a solution in the grid search. Using the mid point: {}",
+                    p_mid.transpose());
+            }
+        }
+    }
+
     // clean up
     {
         std::vector<attribute::MeshAttributeHandle> keeps = m_pass_through_attributes;
@@ -408,6 +510,15 @@ void Marching::add_isovalue(
     const double isovalue)
 {
     m_scalar_field = scalar_field;
+    m_isovalue = isovalue;
+}
+
+void Marching::add_isovalue_oracle(
+    const std::function<double(const Eigen::VectorXd&)> oracle,
+    const double isovalue)
+{
+    assert(!m_scalar_field.has_value());
+    m_oracle = oracle;
     m_isovalue = isovalue;
 }
 

@@ -65,6 +65,20 @@ public:
     void add_isovalue(const attribute::MeshAttributeHandle& scalar_field, const double isovalue);
 
     /**
+     * @brief Position the new vertices along an edge according to an isovalue given by an oracle.
+     *
+     * Marching will try to match the isovalue for each new vertex. However, flipped triangles or
+     * vertices are prohibited. A grid search is applied to find a good position if the isovalue
+     * cannot be interpolated directly.
+     *
+     * @param scalar_field Vertex attribute of type double.
+     * @param isovalue The isovalue which is interpolated for the new vertices.
+     */
+    void add_isovalue_oracle(
+        const std::function<double(const Eigen::VectorXd&)> oracle,
+        const double isovalue);
+
+    /**
      * @brief Set the number of iterations for the linesearch when trying to match the isovalue.
      *
      * This only has an effect if an isovalue was added.
@@ -101,6 +115,9 @@ private:
     double m_isovalue = std::numeric_limits<double>::lowest();
 
     int64_t m_linesearch_iterations = 10;
+
+    std::function<double(const Eigen::VectorXd&)> m_oracle;
+    int64_t m_oracle_samples = 10;
 
     bool m_invert_filter = false;
 

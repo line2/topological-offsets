@@ -47,6 +47,13 @@ struct MarchingOptions
      */
     attribute::MeshAttributeHandle scalar_field;
     double isovalue = std::numeric_limits<double>::lowest();
+
+    /**
+     * Instead of a scalar field, the isovalue can also be accessed through an oracle. If linear
+     * interpolation does not give a result that is within the edge, a sampling strategy is used to
+     * find a point that is as close as possible to the isovalue.
+     */
+    std::function<double(const Eigen::VectorXd&)> oracle;
 };
 
 } // namespace wmtk::components

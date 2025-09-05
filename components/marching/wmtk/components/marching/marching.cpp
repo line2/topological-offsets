@@ -2,6 +2,7 @@
 
 #include <wmtk/components/utils/get_attributes.hpp>
 #include <wmtk/components/utils/resolve_path.hpp>
+#include <wmtk/utils/Logger.hpp>
 
 #include "MarchingOptions.hpp"
 #include "internal/Marching.hpp"
@@ -26,8 +27,16 @@ void marching(Mesh& mesh, const MarchingOptions& options)
         mc.add_filter(filter_handle, filter_value);
     }
 
+    if (options.scalar_field.is_valid() && options.oracle) {
+        log_and_throw_error("Marching must not use scalar field and oracle at the same time.");
+    }
+
     if (options.scalar_field.is_valid()) {
         mc.add_isovalue(options.scalar_field, options.isovalue);
+    }
+
+    if (options.oracle) {
+        mc.add_isovalue_oracle(options.oracle, options.isovalue);
     }
 
     mc.add_pass_through(options.pass_through_attributes);
