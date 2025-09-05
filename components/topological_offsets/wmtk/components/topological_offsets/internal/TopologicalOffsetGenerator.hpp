@@ -67,11 +67,15 @@ public:
 
     void expand_topological_offset_input();
 
+    void expand_topological_offset_input_for_marching();
+
     void expand_finite_offset();
 
     void expand_topological_offset_post();
 
     void marching(const SimpleBVH::BVH& bvh, double offset_distance);
+
+    void marching_sampling(const SimpleBVH::BVH& bvh, double offset_distance);
 
     void marching();
 
@@ -94,14 +98,30 @@ public:
 private:
     bool tet_touches_boundary(const simplex::Simplex& tet);
 
+    /**
+     * @brief Tag all tets that are (conservatively) fully within the offset distance
+     */
     void update_within_od_conservative(
         const attribute::MeshAttributeHandle& within_od_handle,
         const Eigen::MatrixXd& bbox);
 
+    /**
+     * @brief Tag all tets that intersect the offset region at least partially.
+     *
+     * The tagged region is larger than the offset itself.
+     */
     void update_within_od_aggressive(
         const attribute::MeshAttributeHandle& within_od_handle,
         const Eigen::MatrixXd& bbox);
 
+    /**
+     * @brief Tag all tets with all vertices within offset distance
+     */
+    void update_within_od_pointwise(const attribute::MeshAttributeHandle& within_od_handle);
+
+    /**
+     * @brief Grow the offset region without changing its topology.
+     */
     void tag_topological_offset_tets(
         const attribute::MeshAttributeHandle& within_od_handle,
         const attribute::MeshAttributeHandle& tet_touches_boundary_handle,
@@ -117,6 +137,9 @@ private:
 
     void f_to_v_offset_distance();
 
+    /**
+     * @brief Reset offset region tag.
+     */
     void reset_tet_tags();
 
 private:

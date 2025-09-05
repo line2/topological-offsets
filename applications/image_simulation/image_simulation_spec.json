@@ -1,0 +1,120 @@
+[
+  {
+    "pointer": "/",
+    "type": "object",
+    "required": ["input", "distance", "tag_attribute"],
+    "optional": [
+      "output",
+      "finite_offset",
+      "side",
+      "relative_distance_and_length",
+      "intermediate_output",
+      "use_simplicial_embedding",
+      "invert_tags",
+      "report",
+      "log_file",
+      "input_path",
+      "opt_log_level",
+      "DEBUG_print_embedding",
+      "DEBUG_print_offset",
+      "DEBUG_print_smooth"
+    ]
+  },
+  {
+    "pointer": "/input",
+    "type": "string"
+  },
+  {
+    "pointer": "/distance",
+    "type": "list",
+    "min": 1,
+    "doc": "List of desired offset distances."
+  },
+  {
+    "pointer": "/distance/*",
+    "type": "float",
+    "min": 0,
+    "doc": "Desired offset distance."
+  },
+  {
+    "pointer": "/output",
+    "type": "string",
+    "default": ""
+  },
+  {
+    "pointer": "/tag_attribute",
+    "type": "string"
+  },
+  {
+    "pointer": "/finite_offset",
+    "type": "bool",
+    "default": false,
+    "doc": "If true, the component will compute a finite offset instead of the topological one."
+  },
+  {
+    "pointer": "/side",
+    "type": "string",
+    "options": ["in", "out", "double"],
+    "default": "out",
+    "doc": "On which side of the input the offset should be generated: in = inside, out = outside, double = both sides."
+  },
+  {
+    "pointer": "/relative_distance_and_length",
+    "type": "bool",
+    "default": true
+  },
+  {
+    "pointer": "/intermediate_output",
+    "type": "bool",
+    "default": false
+  },
+  {
+    "pointer": "/use_simplicial_embedding",
+    "type": "bool",
+    "default": true
+  },
+  {
+    "pointer": "/invert_tags",
+    "type": "bool",
+    "default": false,
+    "doc": "Switch inside and outside tags on top dimension simplices."
+  },
+  {
+    "pointer": "/report",
+    "type": "string",
+    "default": "topological_offsets_report.json"
+  },
+  {
+    "pointer": "/log_file",
+    "type": "string",
+    "default": "topological_offsets_log.txt"
+  },
+  {
+    "pointer": "/input_path",
+    "type": "string",
+    "default": ""
+  },
+  {
+    "pointer": "/opt_log_level",
+    "type": "int",
+    "default": 6
+  },
+  {
+    "pointer": "/DEBUG_print_embedding",
+    "type": "bool",
+    "default": false,
+    "doc": "Print intermediate embedding results"
+  },
+  {
+    "pointer": "/DEBUG_print_offset",
+    "type": "bool",
+    "default": false,
+    "doc": "Print intermediate offset results"
+  },
+  {
+    "pointer": "/DEBUG_print_smooth",
+    "type": "bool",
+    "default": false,
+    "doc": "Print intermediate smooth results"
+  }
+]

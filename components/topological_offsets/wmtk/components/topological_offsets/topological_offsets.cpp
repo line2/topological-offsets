@@ -240,7 +240,13 @@ TopologicalOffsetsOutput topological_offsets(TopologicalOffsetsOptions options)
 
         logger().info("Generate topological offset.");
 
-        tog.marching(offset_bvh->bvh(), 0);
+        if (options.passes <= 0) {
+            logger().info("Use marching with isovalue {}", options.distance);
+            // tog.marching(offset_bvh->bvh(), options.distance);
+            tog.marching_sampling(offset_bvh->bvh(), options.distance);
+        } else {
+            tog.marching(offset_bvh->bvh(), 0);
+        }
         if (options.expand_topo && !options.finite_offset) {
             top_simplex_tag_handle = tog.tag_offset_tets();
             input_mesh.consolidate();
@@ -292,73 +298,8 @@ TopologicalOffsetsOutput topological_offsets(TopologicalOffsetsOptions options)
     offset_bvh->update_offset_distance_handle();
     offset_bvh->update_face_id_map();
 
-    // check offset validity
-    if (mesh.top_simplex_type() == PrimitiveType::Tetrahedron) {
-        using wmtk::utils::wmtk_orient3d;
-
-        for (const Tuple& tuple_face : offset_mesh.get_all(offset_mesh.top_simplex_type())) {
-            const simplex::Simplex s(offset_mesh, offset_mesh.top_simplex_type(), tuple_face);
-
-            const auto vertices =
-                simplex::faces_single_dimension_tuples(offset_mesh, s, PrimitiveType::Vertex);
-            assert(vertices.size() == 3);
-
-            const auto offset_pos_acc =
-                offset_mesh.create_const_accessor(offset_pos_handle.as<double>());
-
-            const Eigen::Vector3d p0 = offset_pos_acc.const_vector_attribute(vertices[0]);
-            const Eigen::Vector3d p1 = offset_pos_acc.const_vector_attribute(vertices[1]);
-            const Eigen::Vector3d p2 = offset_pos_acc.const_vector_attribute(vertices[2]);
-
-            const Eigen::Vector3d p_mid = (p0 + p1 + p2) / 3.;
-
-            Eigen::Vector3d n_face = ((p1 - p0).cross(p2 - p0)).normalized();
-
-            // check face normal orientation
-            {
-                Tuple tet_tuple = offset_mesh.map_to_parent_tuple(s);
-
-                const auto tet_tag_acc =
-                    mesh.create_const_accessor<int64_t>(top_simplex_tag_handle);
-                // the tet tuple must be the one inside the offset (with a tag)
-                if (tet_tag_acc.const_scalar_attribute(tet_tuple) == 0) {
-                    tet_tuple = mesh.switch_tuple(tet_tuple, mesh.top_simplex_type());
-                    if (tet_tag_acc.const_scalar_attribute(tet_tuple) == 0) {
-                        log_and_throw_error("no tagged tet incident to offset");
-                    }
-                }
-                // get opposite vertex
-                Tuple opposite_vertex = mesh.switch_tuples(
-                    tet_tuple,
-                    {PrimitiveType::Triangle, PrimitiveType::Edge, PrimitiveType::Vertex});
-
-                const auto tet_pos_acc = mesh.create_const_accessor<double>(pos_handle);
-                const Eigen::Vector3d p3 = tet_pos_acc.const_vector_attribute(opposite_vertex);
-
-                const Eigen::Vector3d p_normal = p_mid + n_face;
-                if (wmtk_orient3d(p0, p1, p2, p3) != wmtk_orient3d(p0, p1, p2, p_normal)) {
-                    n_face *= -1;
-                }
-                // n_face points now in the direction of the input
-            }
-
-            auto [sq_dist, offset_distance, nearest_point] =
-                offset_bvh->sq_dist_offset_distance_nearest_point(p_mid);
-
-            const Eigen::Vector3d nearest_normal = (nearest_point - p_mid).normalized();
-
-            if (n_face.dot(nearest_normal) < 0) {
-                logger().warn(
-                    "Bad face orientation in initial offset (n * n_proj = {}). Consider refining "
-                    "the embedding.",
-                    n_face.dot(nearest_normal));
-                break;
-            }
-        }
-    }
-
     // optimize offset
-    {
+    if (options.passes > 0) {
         logger().info("Optimize infinitesimal offset.");
 
         // log input distance

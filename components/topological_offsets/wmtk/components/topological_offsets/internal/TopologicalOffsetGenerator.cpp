@@ -1054,6 +1054,73 @@ void TopologicalOffsetGenerator::marching(const SimpleBVH::BVH& bvh, double offs
     }
 }
 
+void TopologicalOffsetGenerator::marching_sampling(
+    const SimpleBVH::BVH& bvh,
+    double offset_distance)
+{
+    /*
+     * Using a distance field turned out to be not beneficial for the process as it might cause
+     * vertices to snap to the wrong side and that messes with finding the nearest neighbor
+     * later on.
+     */
+
+    MarchingOptions options;
+    options.position_handle = m_pos_handle;
+    options.label_handles[PrimitiveType::Vertex] = m_tag_handles[PrimitiveType::Vertex];
+    options.label_handles[PrimitiveType::Edge] = m_tag_handles[PrimitiveType::Edge];
+
+    if (m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron) {
+        options.label_handles[PrimitiveType::Triangle] = m_tag_handles[PrimitiveType::Triangle];
+        options.pass_through_attributes.emplace_back(m_tag_handles[PrimitiveType::Tetrahedron]);
+    } else if (m_mesh.top_simplex_type() == PrimitiveType::Triangle) {
+        options.pass_through_attributes.emplace_back(m_tag_handles[PrimitiveType::Triangle]);
+    }
+
+    options.pass_through_attributes.emplace_back(m_offset_tag_handle);
+    if (m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+        m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
+        options.pass_through_attributes.emplace_back(
+            m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
+    }
+    options.input_values = {m_inside_tag};
+    options.output_value = m_offset_tag;
+
+    auto oracle = [&bvh](const Eigen::VectorXd& p) -> double {
+        double sq_dist;
+        SimpleBVH::VectorMax3d nearest_point;
+        bvh.nearest_facet(p, nearest_point, sq_dist);
+        return std::sqrt(sq_dist);
+    };
+    options.oracle = oracle;
+    options.isovalue = offset_distance;
+
+    wmtk::components::marching(m_mesh, options);
+
+    {
+        auto df_handle = m_mesh.register_attribute<double>(
+            "DEBUG_distance",
+            PrimitiveType::Vertex,
+            1,
+            false,
+            std::numeric_limits<double>::max());
+
+        const auto p_acc = m_mesh.create_const_accessor(m_pos_handle.as<double>());
+        auto df_acc = m_mesh.create_accessor(df_handle.as<double>());
+
+        for (const Tuple& t : m_mesh.get_all(PrimitiveType::Vertex)) {
+            const simplex::Simplex v(m_mesh, PrimitiveType::Vertex, t);
+            const Eigen::Vector3d p = p_acc.const_vector_attribute(v);
+            df_acc.scalar_attribute(v) = oracle(p);
+        }
+    }
+
+    if (m_debug_print) {
+        logger().info("Marching done");
+        const std::string name = fmt::format("tog_debug_{}", m_debug_print_counter++);
+        utils::write_mesh(m_pos_handle, name, m_debug_print);
+    }
+}
+
 void TopologicalOffsetGenerator::marching()
 {
     MarchingOptions options;
