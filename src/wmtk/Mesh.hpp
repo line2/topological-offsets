@@ -89,7 +89,7 @@ template <typename Visitor>
 class MultiMeshVisitorExecutor;
 
 namespace utils {
-    class MapValidator;
+class MapValidator;
 namespace internal {
 class TupleTag;
 }
@@ -798,7 +798,7 @@ protected:
     // creates a scope as int64_t as the AttributeScopeHandle exists
     [[nodiscard]] attribute::AttributeScopeHandle create_single_mesh_scope();
 
-protected:
+public:
     /**
      * @brief return the global id of the Tuple of the given dimension
      *

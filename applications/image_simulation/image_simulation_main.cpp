@@ -19,9 +19,9 @@
 #include <wmtk/utils/Stopwatch.hpp>
 #include <wmtk/utils/primitive_range.hpp>
 
-#include "utils/igl_input.hpp"
-
 #include "image_simulation_spec.hpp"
+#include "utils/igl_input.hpp"
+#include "utils/write_msh.hpp"
 
 using namespace wmtk;
 namespace fs = std::filesystem;
@@ -163,9 +163,8 @@ int main(int argc, char* argv[])
             input_file.string());
     }
 
+    const std::string tag_attribute_name = j["tag_attribute"];
     {
-        const std::string tag_attribute_name = j["tag_attribute"];
-
         mesh_in = components::input::input(input_file, false, {tag_attribute_name});
         Mesh& mesh = *mesh_in;
 
@@ -522,7 +521,12 @@ int main(int argc, char* argv[])
             fmt::format("{}_embedding", output_file.string()),
             embedding_pos_handle);
 
-        // TODO MSH output
+        // MSH output
+        utils::write_msh(
+            embedding_pos_handle,
+            img_tag,
+            tag_attribute_name,
+            fmt::format("{}.msh", output_file.string()));
     }
 
     sw_total.stop();
@@ -536,6 +540,7 @@ int main(int argc, char* argv[])
         ofs << std::setw(4) << out_json;
     }
 
+    logger().info("===== finished =====");
 
     return 0;
 }

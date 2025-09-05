@@ -4,6 +4,7 @@ wmtk_add_application(image_simulation_app
     image_simulation_spec.hpp
     utils/igl_input.hpp
     utils/igl_input.cpp
+    utils/write_msh.hpp
     )
 
 
