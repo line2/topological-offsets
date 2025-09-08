@@ -11,6 +11,7 @@ nlohmann::json image_simulation_spec = R"(
     "optional": [
       "output",
       "tags",
+      "offset_tag",
       "finite_offset",
       "side",
       "relative_distance_and_length",
@@ -56,8 +57,14 @@ nlohmann::json image_simulation_spec = R"(
   },
   {
     "pointer": "/tags/*",
-    "type": "float",
+    "type": "int",
     "doc": "Input tag."
+  },
+  {
+    "pointer": "/offset_tag",
+    "type": "int",
+    "default": 0,
+    "doc": "The tag assigned to the offset region."
   },
   {
     "pointer": "/tag_attribute",

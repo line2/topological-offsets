@@ -574,6 +574,8 @@ int main(int argc, char* argv[])
         auto img_tag = mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron);
         auto img_tag_acc = mesh.create_accessor<int64_t>(img_tag);
 
+        const int64_t offset_tag_val = j["offset_tag"];
+
         const PrimitiveType pt_top = mesh.top_simplex_type();
         const PrimitiveType pt_face = get_primitive_type_from_id(get_primitive_type_id(pt_top) - 1);
 
@@ -588,10 +590,10 @@ int main(int argc, char* argv[])
 
             const Tuple t_opp = mesh.switch_tuple(t, PrimitiveType::Tetrahedron);
 
-            if (img_tag_acc.const_scalar_attribute(t) != embedding_tag) {
+            if (img_tag_acc.const_scalar_attribute(t) != offset_tag_val) {
                 q[q_back++] = t;
             }
-            if (img_tag_acc.const_scalar_attribute(t_opp) != embedding_tag) {
+            if (img_tag_acc.const_scalar_attribute(t_opp) != offset_tag_val) {
                 q[q_back++] = t_opp;
             }
 
@@ -617,10 +619,10 @@ int main(int argc, char* argv[])
 
                     const Tuple ts = mesh.switch_tuple(face.tuple(), pt_top);
                     const simplex::Simplex ts_simplex(mesh, pt_top, ts);
-                    if (img_tag_acc.const_scalar_attribute(ts) == embedding_tag) {
+                    if (img_tag_acc.const_scalar_attribute(ts) == offset_tag_val) {
                         continue;
                     }
-                    img_tag_acc.scalar_attribute(ts) = embedding_tag;
+                    img_tag_acc.scalar_attribute(ts) = offset_tag_val;
                     if (q_back + 1 == q.size()) {
                         q.resize(1.5 * q.size());
                     }
