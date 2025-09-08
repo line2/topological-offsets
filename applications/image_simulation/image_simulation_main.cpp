@@ -6,7 +6,9 @@
 
 #include <wmtk/Mesh.hpp>
 #include <wmtk/operations/attribute_update/AttributeTransferStrategy.hpp>
+#include <wmtk/simplex/cofaces_single_dimension_iterable.hpp>
 #include <wmtk/simplex/faces_single_dimension.hpp>
+#include <wmtk/simplex/top_dimension_cofaces_iterable.hpp>
 #include <wmtk/utils/Logger.hpp>
 
 #include <wmtk/components/input/input.hpp>
@@ -182,22 +184,109 @@ int main(int argc, char* argv[])
             1,
             false,
             embedding_tag);
-        auto tag_acc = mesh.create_accessor<int64_t>(tag_handles[PrimitiveType::Triangle]);
+        auto tag_tri_acc = mesh.create_accessor<int64_t>(tag_handles[PrimitiveType::Triangle]);
 
         bool has_tag = false;
 
         // tag all faces in between two different tet tags
-        // TODOfix: use input to determin where to place input tags
-        for (const Tuple& t : mesh.get_all(PrimitiveType::Triangle)) {
-            if (mesh.is_boundary(PrimitiveType::Triangle, t)) {
-                continue;
+        std::vector<int64_t> tags_to_separate = j["tags"];
+        if (tags_to_separate.empty()) {
+            for (const Tuple& t : mesh.get_all(PrimitiveType::Triangle)) {
+                if (mesh.is_boundary(PrimitiveType::Triangle, t)) {
+                    continue;
+                }
+                const auto tag0 = tag_dbl_acc.const_scalar_attribute(t);
+                const auto tag1 = tag_dbl_acc.const_scalar_attribute(
+                    mesh.switch_tuple(t, PrimitiveType::Tetrahedron));
+                if (tag0 != tag1) {
+                    tag_tri_acc.scalar_attribute(t) = input_tag;
+                    has_tag = true;
+                }
             }
-            const auto tag0 = tag_dbl_acc.const_scalar_attribute(t);
-            const auto tag1 = tag_dbl_acc.const_scalar_attribute(
-                mesh.switch_tuple(t, PrimitiveType::Tetrahedron));
-            if (tag0 != tag1) {
-                tag_acc.scalar_attribute(t) = input_tag;
-                has_tag = true;
+        } else if (tags_to_separate.size() == 1) {
+            tag_handles[PrimitiveType::Tetrahedron] = mesh.register_attribute<int64_t>(
+                tag_attr_names[PrimitiveType::Tetrahedron],
+                PrimitiveType::Tetrahedron,
+                1,
+                false,
+                embedding_tag);
+
+            auto tag_tet_acc =
+                mesh.create_accessor<int64_t>(tag_handles[PrimitiveType::Tetrahedron]);
+
+            for (const Tuple& t : mesh.get_all(PrimitiveType::Tetrahedron)) {
+                if (tag_dbl_acc.const_scalar_attribute(t) == tags_to_separate[0]) {
+                    tag_tet_acc.scalar_attribute(t) = input_tag;
+                    const auto faces = simplex::faces_single_dimension(
+                        mesh,
+                        simplex::Simplex(PrimitiveType::Tetrahedron, t),
+                        PrimitiveType::Triangle);
+                    for (const auto& f : faces) {
+                        tag_tri_acc.scalar_attribute(f) = input_tag;
+                    }
+                    has_tag = true;
+                }
+            }
+        } else {
+            assert(tags_to_separate.size() == 2);
+            // for (const Tuple& t : mesh.get_all(PrimitiveType::Triangle)) {
+            //     if (mesh.is_boundary(PrimitiveType::Triangle, t)) {
+            //         continue;
+            //     }
+            //     const auto tag0 = tag_dbl_acc.const_scalar_attribute(t);
+            //     const auto tag1 = tag_dbl_acc.const_scalar_attribute(
+            //         mesh.switch_tuple(t, PrimitiveType::Tetrahedron));
+            //     if ((tag0 == tags_to_separate[0] && tag1 == tags_to_separate[1]) ||
+            //         (tag0 == tags_to_separate[1] && tag1 == tags_to_separate[0])) {
+            //         tag_tri_acc.scalar_attribute(t) = input_tag;
+            //         has_tag = true;
+            //     }
+            // }
+
+            /*
+             * This became a bit more complicated than it should be. Currently the implementation
+             * can only take in a mesh as input, meaning that it cannot represent any simplicial
+             * complex, i.e. a triangle mesh with dangling edges. To safely separate two tags, we
+             * need to consider also vertices and edges in which these edges might touch. Therefore,
+             * we are adding here all triangles that are incident to vertices that are themselves
+             * incident to both tags.
+             */
+            for (const Tuple& t : mesh.get_all(PrimitiveType::Vertex)) {
+                const simplex::Simplex v(PrimitiveType::Vertex, t);
+                // is v incident to both tags?
+                {
+                    bool has_tag0 = false;
+                    bool has_tag1 = false;
+                    for (const Tuple& tt : simplex::top_dimension_cofaces_iterable(mesh, v)) {
+                        if (tag_dbl_acc.const_scalar_attribute(tt) == tags_to_separate[0]) {
+                            has_tag0 = true;
+                        } else if (tag_dbl_acc.const_scalar_attribute(tt) == tags_to_separate[1]) {
+                            has_tag1 = true;
+                        }
+                    }
+                    if (!(has_tag0 && has_tag1)) {
+                        continue;
+                    }
+                }
+                // v is incident to both tags --> tag all triangles that are incident to one of the
+                // tags
+                for (const Tuple& tt :
+                     simplex::cofaces_single_dimension_iterable(mesh, v, PrimitiveType::Triangle)) {
+                    const simplex::Simplex f(PrimitiveType::Triangle, tt);
+                    if (mesh.is_boundary(f)) {
+                        continue;
+                    }
+                    const auto tag0 = tag_dbl_acc.const_scalar_attribute(f);
+                    const auto tag1 = tag_dbl_acc.const_scalar_attribute(
+                        mesh.switch_tuple(tt, PrimitiveType::Tetrahedron));
+                    if ((tag0 == tags_to_separate[0] && tag1 != tags_to_separate[0]) ||
+                        (tag0 == tags_to_separate[1] && tag1 != tags_to_separate[1]) ||
+                        (tag1 == tags_to_separate[0] && tag0 != tags_to_separate[0]) ||
+                        (tag1 == tags_to_separate[1] && tag0 != tags_to_separate[1])) {
+                        tag_tri_acc.scalar_attribute(f) = input_tag;
+                        has_tag = true;
+                    }
+                }
             }
         }
 
@@ -214,14 +303,11 @@ int main(int argc, char* argv[])
             const auto fs =
                 simplex::faces_single_dimension_tuples(mesh, v, PrimitiveType::Triangle);
             for (const Tuple& f : fs) {
-                if (tag_acc.scalar_attribute(f) == input_tag) {
+                if (tag_tri_acc.scalar_attribute(f) == input_tag) {
                     log_and_throw_error("Cannot generate offset. Input contains tag at boundary.");
                 }
             }
         }
-
-        auto pos_handle =
-            mesh_in->get_attribute_handle<double>(pos_attr_name, PrimitiveType::Vertex);
 
         auto tag_int_handle =
             mesh.register_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron, 1);
@@ -230,7 +316,20 @@ int main(int argc, char* argv[])
             tag_int_acc.scalar_attribute(t) = tag_dbl_acc.scalar_attribute(t);
         }
 
-        mesh.clear_attributes({tag_handles[PrimitiveType::Triangle], pos_handle, tag_int_handle});
+        {
+            auto pos_handle =
+                mesh_in->get_attribute_handle<double>(pos_attr_name, PrimitiveType::Vertex);
+
+            std::vector<attribute::MeshAttributeHandle> keeps;
+            keeps.emplace_back(pos_handle);
+            keeps.emplace_back(tag_int_handle);
+            for (const auto& [pt, h] : tag_handles) {
+                keeps.emplace_back(h);
+            }
+            // mesh.clear_attributes(
+            //     {tag_handles[PrimitiveType::Triangle], pos_handle, tag_int_handle});
+            mesh.clear_attributes(keeps);
+        }
     }
 
     Mesh& mesh = *mesh_in;
@@ -288,12 +387,18 @@ int main(int argc, char* argv[])
     }
 
     mesh.clear_attributes(keep_attributes);
-    wmtk::components::output::output(mesh, "debug_test_0", embedding_pos_handle);
 
     // make child-mesh from boundary
     make_boundary_child_mesh(mesh_in);
+    {
+        keep_attributes.clear();
+        keep_attributes.emplace_back(embedding_pos_handle);
+        if (mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
+            keep_attributes.emplace_back(
+                mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
+        }
+    }
     mesh.clear_attributes(keep_attributes);
-
 
     std::shared_ptr<Mesh> input_mesh;
     std::shared_ptr<Mesh> inside_mesh;
@@ -315,7 +420,15 @@ int main(int argc, char* argv[])
         }
 
         input_mesh = components::multimesh_from_tag(mesh_in, tag_attr, 1);
-        mesh.clear_attributes({embedding_pos_handle});
+
+        std::vector<attribute::MeshAttributeHandle> keep_attributes;
+        keep_attributes.emplace_back(embedding_pos_handle);
+
+        if (mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
+            keep_attributes.emplace_back(
+                mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
+        }
+        mesh.clear_attributes(keep_attributes);
 
         inside_mesh = substructures[input_tag];
     } else {
