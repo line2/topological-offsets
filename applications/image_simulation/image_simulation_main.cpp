@@ -165,18 +165,22 @@ int main(int argc, char* argv[])
             input_file.string());
     }
 
-    const std::string tag_attribute_name = j["tag_attribute"];
+    const std::vector<std::string> tag_attribute_names = j["tag_attributes"];
     {
-        mesh_in = components::input::input(input_file, false, {tag_attribute_name});
+        mesh_in = components::input::input(input_file, false, tag_attribute_names);
         Mesh& mesh = *mesh_in;
 
         if (mesh.top_simplex_type() != PrimitiveType::Tetrahedron) {
             log_and_throw_error("This part of the code was only written for tet meshes.");
         }
 
-        auto tag_dbl_handle =
-            mesh.get_attribute_handle<double>(tag_attribute_name, PrimitiveType::Tetrahedron);
-        auto tag_dbl_acc = mesh.create_accessor<double>(tag_dbl_handle);
+        std::vector<attribute::MeshAttributeHandle> tag_dbl_handles;
+        std::vector<attribute::Accessor<double>> tag_dbl_accs;
+        for (const std::string& attr_name : tag_attribute_names) {
+            tag_dbl_handles.push_back(
+                mesh.get_attribute_handle<double>(attr_name, PrimitiveType::Tetrahedron));
+            tag_dbl_accs.push_back(mesh.create_accessor<double>(tag_dbl_handles.back()));
+        }
 
         tag_handles[PrimitiveType::Triangle] = mesh.register_attribute<int64_t>(
             tag_attr_names[PrimitiveType::Triangle],
@@ -186,24 +190,25 @@ int main(int argc, char* argv[])
             embedding_tag);
         auto tag_tri_acc = mesh.create_accessor<int64_t>(tag_handles[PrimitiveType::Triangle]);
 
-        bool has_tag = false;
+        bool has_tag_check = false;
 
         // tag all faces in between two different tet tags
-        std::vector<int64_t> tags_to_separate = j["tags"];
+        std::vector<std::vector<int64_t>> tags_to_separate = j["tags"];
         if (tags_to_separate.empty()) {
             for (const Tuple& t : mesh.get_all(PrimitiveType::Triangle)) {
                 if (mesh.is_boundary(PrimitiveType::Triangle, t)) {
                     continue;
                 }
-                const auto tag0 = tag_dbl_acc.const_scalar_attribute(t);
-                const auto tag1 = tag_dbl_acc.const_scalar_attribute(
+                const auto tag0 = tag_dbl_accs[0].const_scalar_attribute(t);
+                const auto tag1 = tag_dbl_accs[0].const_scalar_attribute(
                     mesh.switch_tuple(t, PrimitiveType::Tetrahedron));
                 if (tag0 != tag1) {
                     tag_tri_acc.scalar_attribute(t) = input_tag;
-                    has_tag = true;
+                    has_tag_check = true;
                 }
             }
         } else if (tags_to_separate.size() == 1) {
+            assert(tags_to_separate[0].size() == 2);
             tag_handles[PrimitiveType::Tetrahedron] = mesh.register_attribute<int64_t>(
                 tag_attr_names[PrimitiveType::Tetrahedron],
                 PrimitiveType::Tetrahedron,
@@ -215,7 +220,8 @@ int main(int argc, char* argv[])
                 mesh.create_accessor<int64_t>(tag_handles[PrimitiveType::Tetrahedron]);
 
             for (const Tuple& t : mesh.get_all(PrimitiveType::Tetrahedron)) {
-                if (tag_dbl_acc.const_scalar_attribute(t) == tags_to_separate[0]) {
+                if (tag_dbl_accs[tags_to_separate[0][0]].const_scalar_attribute(t) ==
+                    tags_to_separate[0][1]) {
                     tag_tet_acc.scalar_attribute(t) = input_tag;
                     const auto faces = simplex::faces_single_dimension(
                         mesh,
@@ -224,11 +230,11 @@ int main(int argc, char* argv[])
                     for (const auto& f : faces) {
                         tag_tri_acc.scalar_attribute(f) = input_tag;
                     }
-                    has_tag = true;
+                    has_tag_check = true;
                 }
             }
         } else {
-            assert(tags_to_separate.size() == 2);
+            assert(tags_to_separate.size() >= 2);
             // for (const Tuple& t : mesh.get_all(PrimitiveType::Triangle)) {
             //     if (mesh.is_boundary(PrimitiveType::Triangle, t)) {
             //         continue;
@@ -249,26 +255,30 @@ int main(int argc, char* argv[])
              * complex, i.e. a triangle mesh with dangling edges. To safely separate two tags, we
              * need to consider also vertices and edges in which these edges might touch. Therefore,
              * we are adding here all triangles that are incident to vertices that are themselves
-             * incident to both tags.
+             * incident to all tags.
              */
             for (const Tuple& t : mesh.get_all(PrimitiveType::Vertex)) {
                 const simplex::Simplex v(PrimitiveType::Vertex, t);
-                // is v incident to both tags?
+                // is v incident to all tags?
                 {
-                    bool has_tag0 = false;
-                    bool has_tag1 = false;
+                    std::vector<bool> has_tag_vec(tag_dbl_handles.size(), false);
                     for (const Tuple& tt : simplex::top_dimension_cofaces_iterable(mesh, v)) {
-                        if (tag_dbl_acc.const_scalar_attribute(tt) == tags_to_separate[0]) {
-                            has_tag0 = true;
-                        } else if (tag_dbl_acc.const_scalar_attribute(tt) == tags_to_separate[1]) {
-                            has_tag1 = true;
+                        for (size_t i = 0; i < tags_to_separate.size(); ++i) {
+                            if (tag_dbl_accs[tags_to_separate[i][0]].const_scalar_attribute(tt) ==
+                                tags_to_separate[i][1]) {
+                                has_tag_vec[i] = true;
+                            }
                         }
                     }
-                    if (!(has_tag0 && has_tag1)) {
+                    bool has_all_tags = true;
+                    for (const bool h : has_tag_vec) {
+                        has_all_tags = has_all_tags && h;
+                    }
+                    if (!has_all_tags) {
                         continue;
                     }
                 }
-                // v is incident to both tags --> tag all triangles that are incident to one of the
+                // v is incident to all tags --> tag all triangles that are incident to one of the
                 // tags
                 for (const Tuple& tt :
                      simplex::cofaces_single_dimension_iterable(mesh, v, PrimitiveType::Triangle)) {
@@ -276,21 +286,28 @@ int main(int argc, char* argv[])
                     if (mesh.is_boundary(f)) {
                         continue;
                     }
-                    const auto tag0 = tag_dbl_acc.const_scalar_attribute(f);
-                    const auto tag1 = tag_dbl_acc.const_scalar_attribute(
-                        mesh.switch_tuple(tt, PrimitiveType::Tetrahedron));
-                    if ((tag0 == tags_to_separate[0] && tag1 != tags_to_separate[0]) ||
-                        (tag0 == tags_to_separate[1] && tag1 != tags_to_separate[1]) ||
-                        (tag1 == tags_to_separate[0] && tag0 != tags_to_separate[0]) ||
-                        (tag1 == tags_to_separate[1] && tag0 != tags_to_separate[1])) {
-                        tag_tri_acc.scalar_attribute(f) = input_tag;
-                        has_tag = true;
+                    const Tuple tt_opp = mesh.switch_tuple(tt, PrimitiveType::Tetrahedron);
+                    for (size_t i = 0; i < tags_to_separate.size(); ++i) {
+                        if ((tag_dbl_accs[tags_to_separate[i][0]].const_scalar_attribute(tt) ==
+                             tags_to_separate[i][1]) &&
+                            (tag_dbl_accs[tags_to_separate[i][0]].const_scalar_attribute(tt_opp) !=
+                             tags_to_separate[i][1])) {
+                            tag_tri_acc.scalar_attribute(f) = input_tag;
+                            has_tag_check = true;
+                        }
+                        if ((tag_dbl_accs[tags_to_separate[i][0]].const_scalar_attribute(tt_opp) ==
+                             tags_to_separate[i][1]) &&
+                            (tag_dbl_accs[tags_to_separate[i][0]].const_scalar_attribute(tt) !=
+                             tags_to_separate[i][1])) {
+                            tag_tri_acc.scalar_attribute(f) = input_tag;
+                            has_tag_check = true;
+                        }
                     }
                 }
             }
         }
 
-        if (!has_tag) {
+        if (!has_tag_check) {
             log_and_throw_error("Cannot generate offset. Input tag not found.");
         }
 
@@ -309,11 +326,15 @@ int main(int argc, char* argv[])
             }
         }
 
-        auto tag_int_handle =
-            mesh.register_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron, 1);
+        auto tag_int_handle = mesh.register_attribute<int64_t>(
+            "img_tag",
+            PrimitiveType::Tetrahedron,
+            tag_dbl_handles.size());
         auto tag_int_acc = mesh.create_accessor<int64_t>(tag_int_handle);
         for (const Tuple& t : mesh.get_all(PrimitiveType::Tetrahedron)) {
-            tag_int_acc.scalar_attribute(t) = tag_dbl_acc.scalar_attribute(t);
+            for (size_t i = 0; i < tag_int_handle.dimension(); ++i) {
+                tag_int_acc.vector_attribute(t)[i] = tag_dbl_accs[i].scalar_attribute(t);
+            }
         }
 
         {
@@ -381,10 +402,9 @@ int main(int argc, char* argv[])
     std::vector<attribute::MeshAttributeHandle> keep_attributes;
     keep_attributes.emplace_back(embedding_pos_handle);
 
-    if (mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
-        keep_attributes.emplace_back(
-            mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
-    }
+    assert(mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron));
+    keep_attributes.emplace_back(
+        mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
 
     mesh.clear_attributes(keep_attributes);
 
@@ -393,10 +413,9 @@ int main(int argc, char* argv[])
     {
         keep_attributes.clear();
         keep_attributes.emplace_back(embedding_pos_handle);
-        if (mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
-            keep_attributes.emplace_back(
-                mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
-        }
+        assert(mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron));
+        keep_attributes.emplace_back(
+            mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
     }
     mesh.clear_attributes(keep_attributes);
 
@@ -424,10 +443,9 @@ int main(int argc, char* argv[])
         std::vector<attribute::MeshAttributeHandle> keep_attributes;
         keep_attributes.emplace_back(embedding_pos_handle);
 
-        if (mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
-            keep_attributes.emplace_back(
-                mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
-        }
+        assert(mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron));
+        keep_attributes.emplace_back(
+            mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
         mesh.clear_attributes(keep_attributes);
 
         inside_mesh = substructures[input_tag];
@@ -490,10 +508,10 @@ int main(int argc, char* argv[])
             tog_output = components::topological_offsets(options);
         }
 
-        wmtk::components::output::output(
-            *tog_output.offset_mesh,
-            output_file,
-            tog_output.offset_position_handle);
+        // wmtk::components::output::output(
+        //     *tog_output.offset_mesh,
+        //     output_file,
+        //     tog_output.offset_position_handle);
 
         out_json["stats"]["vertices"] = mesh.get_all(PrimitiveType::Vertex).size();
         out_json["stats"]["edges"] = mesh.get_all(PrimitiveType::Edge).size();
@@ -561,11 +579,11 @@ int main(int argc, char* argv[])
         }
     }
 
-    // input output
-    wmtk::components::output::output(
-        *input_mesh,
-        fmt::format("{}_input", output_file.string()),
-        "vertices");
+    //// input output
+    // wmtk::components::output::output(
+    //     *input_mesh,
+    //     fmt::format("{}_input", output_file.string()),
+    //     "vertices");
 
 
     // embedding output
@@ -574,7 +592,7 @@ int main(int argc, char* argv[])
         auto img_tag = mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron);
         auto img_tag_acc = mesh.create_accessor<int64_t>(img_tag);
 
-        const int64_t offset_tag_val = j["offset_tag"];
+        const std::vector<std::vector<int64_t>> offset_tag_vals = j["offset_tag"];
 
         const PrimitiveType pt_top = mesh.top_simplex_type();
         const PrimitiveType pt_face = get_primitive_type_from_id(get_primitive_type_id(pt_top) - 1);
@@ -590,10 +608,12 @@ int main(int argc, char* argv[])
 
             const Tuple t_opp = mesh.switch_tuple(t, PrimitiveType::Tetrahedron);
 
-            if (img_tag_acc.const_scalar_attribute(t) != offset_tag_val) {
+            if (img_tag_acc.const_vector_attribute(t)[offset_tag_vals[0][0]] !=
+                offset_tag_vals[0][1]) {
                 q[q_back++] = t;
             }
-            if (img_tag_acc.const_scalar_attribute(t_opp) != offset_tag_val) {
+            if (img_tag_acc.const_vector_attribute(t_opp)[offset_tag_vals[0][0]] !=
+                offset_tag_vals[0][1]) {
                 q[q_back++] = t_opp;
             }
 
@@ -619,10 +639,11 @@ int main(int argc, char* argv[])
 
                     const Tuple ts = mesh.switch_tuple(face.tuple(), pt_top);
                     const simplex::Simplex ts_simplex(mesh, pt_top, ts);
-                    if (img_tag_acc.const_scalar_attribute(ts) == offset_tag_val) {
+                    if (img_tag_acc.const_vector_attribute(ts)[offset_tag_vals[0][0]] ==
+                        offset_tag_vals[0][1]) {
                         continue;
                     }
-                    img_tag_acc.scalar_attribute(ts) = offset_tag_val;
+                    img_tag_acc.vector_attribute(ts)[offset_tag_vals[0][0]] = offset_tag_vals[0][1];
                     if (q_back + 1 == q.size()) {
                         q.resize(1.5 * q.size());
                     }
@@ -640,7 +661,7 @@ int main(int argc, char* argv[])
         utils::write_msh(
             embedding_pos_handle,
             img_tag,
-            tag_attribute_name,
+            tag_attribute_names,
             fmt::format("{}.msh", output_file.string()));
     }
 

@@ -2,7 +2,7 @@
   {
     "pointer": "/",
     "type": "object",
-    "required": ["input", "distance", "tag_attribute"],
+    "required": ["input", "distance", "tag_attributes"],
     "optional": [
       "output",
       "tags",
@@ -47,22 +47,44 @@
     "pointer": "/tags",
     "type": "list",
     "default": [],
-    "max": 2,
     "doc": "List tags that should be used as input for the offset. If the list is empty, an offset is generated in between all tags. If one tag is given, the offset is computed around that tag region (can be combined with inside option). If two tags are given, the offset around the interface of the two tags is generated."
   },
   {
     "pointer": "/tags/*",
-    "type": "int",
-    "doc": "Input tag."
+    "type": "list",
+    "min": 2,
+    "max": 2,
+    "doc": "Input tags are given by the tag_attribute ID and the ID within that tag_attribute. For example, if tag_attributes are [tag_0, tag_1], then the tag 2 in tag_0 is [0,2]."
+  },
+  {
+    "pointer": "/tags/*/*",
+    "type": "int"
   },
   {
     "pointer": "/offset_tag",
-    "type": "int",
-    "default": 0,
-    "doc": "The tag assigned to the offset region."
+    "type": "list",
+    "default": [0, 0],
+    "max": 1,
+    "doc": "The tag assigned to the offset region. All unspecified tag_attributes are left untouched. Can currently only set one tag."
   },
   {
-    "pointer": "/tag_attribute",
+    "pointer": "/offset_tag/*",
+    "type": "list",
+    "min": 2,
+    "max": 2
+  },
+  {
+    "pointer": "/offset_tag/*/*",
+    "type": "int"
+  },
+  {
+    "pointer": "/tag_attributes",
+    "type": "list",
+    "min": 1,
+    "doc": "All tag attributes that exist, e.g., segmentation and filter"
+  },
+  {
+    "pointer": "/tag_attributes/*",
     "type": "string"
   },
   {

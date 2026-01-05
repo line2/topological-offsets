@@ -106,11 +106,12 @@ void TopologicalOffsetGenerator::regularize(bool use_simplicial_embedding)
     options.pass_through_attributes.emplace_back(m_offset_tag_handle);
     options.pass_through_attributes.emplace_back(m_bvh->f_offset_distance_handle());
     options.pass_through_attributes.emplace_back(m_bvh->v_offset_distance_handle());
-    if (m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
-        m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
-        options.pass_through_attributes.emplace_back(
-            m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
-    }
+    assert(
+        m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+        m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron));
+    options.pass_through_attributes.emplace_back(
+        m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
+
     options.tag_attributes = m_tag_handles;
     options.value = m_inside_tag;
     options.generate_simplicial_embedding = use_simplicial_embedding;
@@ -1034,11 +1035,11 @@ void TopologicalOffsetGenerator::marching(const SimpleBVH::BVH& bvh, double offs
     }
 
     options.pass_through_attributes.emplace_back(m_offset_tag_handle);
-    if (m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
-        m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
-        options.pass_through_attributes.emplace_back(
-            m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
-    }
+    assert(
+        m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+        m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron));
+    options.pass_through_attributes.emplace_back(
+        m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
     options.input_values = {m_inside_tag};
     options.output_value = m_offset_tag;
 
@@ -1077,11 +1078,11 @@ void TopologicalOffsetGenerator::marching_sampling(
     }
 
     options.pass_through_attributes.emplace_back(m_offset_tag_handle);
-    if (m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
-        m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
-        options.pass_through_attributes.emplace_back(
-            m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
-    }
+    assert(
+        m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+        m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron));
+    options.pass_through_attributes.emplace_back(
+        m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
     options.input_values = {m_inside_tag};
     options.output_value = m_offset_tag;
 
@@ -1136,11 +1137,11 @@ void TopologicalOffsetGenerator::marching()
     }
 
     options.pass_through_attributes.emplace_back(m_offset_tag_handle);
-    if (m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
-        m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron)) {
-        options.pass_through_attributes.emplace_back(
-            m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
-    }
+    assert(
+        m_mesh.top_simplex_type() == PrimitiveType::Tetrahedron &&
+        m_mesh.has_attribute<int64_t>("img_tag", PrimitiveType::Tetrahedron));
+    options.pass_through_attributes.emplace_back(
+        m_mesh.get_attribute_handle<int64_t>("img_tag", PrimitiveType::Tetrahedron));
     options.input_values = {m_inside_tag};
     options.output_value = m_offset_tag;
 

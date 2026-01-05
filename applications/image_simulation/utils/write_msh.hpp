@@ -181,7 +181,7 @@ private:
 inline void write_msh(
     const attribute::MeshAttributeHandle& position_attribute,
     const attribute::MeshAttributeHandle& img_tag_attribute,
-    const std::string& tag_attribute_name,
+    const std::vector<std::string>& tag_attribute_names,
     const std::filesystem::path& file)
 {
     const Mesh& m = position_attribute.mesh();
@@ -215,9 +215,11 @@ inline void write_msh(
         return data;
     });
 
-    msh.add_tet_attribute<1>(tag_attribute_name, [&](size_t i) {
-        return tag_acc.const_scalar_attribute(tets[i]);
-    });
+    for (size_t j = 0; j < tag_attribute_names.size(); ++j) {
+        msh.add_tet_attribute<1>(tag_attribute_names[j], [&](size_t i) {
+            return tag_acc.const_vector_attribute(tets[i])[j];
+        });
+    }
 
     msh.save(file.string(), true);
 }
