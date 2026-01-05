@@ -41,7 +41,7 @@ if(WMTK_WITH_CCACHE AND CCACHE_PROGRAM)
 endif()
 
 # ###############################################################################
-project(WildMeshingToolkit DESCRIPTION "A mesh optimization toolkit" LANGUAGES C CXX)
+project(TopologicalOffsets DESCRIPTION "A mesh optimization toolkit" LANGUAGES C CXX)
 
 # ###############################################################################
 option(WMTK_BUILD_DOCS "Build doxygen" OFF)
