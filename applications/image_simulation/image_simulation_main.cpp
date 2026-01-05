@@ -261,7 +261,7 @@ int main(int argc, char* argv[])
                 const simplex::Simplex v(PrimitiveType::Vertex, t);
                 // is v incident to all tags?
                 {
-                    std::vector<bool> has_tag_vec(tag_dbl_handles.size(), false);
+                    std::vector<bool> has_tag_vec(tags_to_separate.size(), false);
                     for (const Tuple& tt : simplex::top_dimension_cofaces_iterable(mesh, v)) {
                         for (size_t i = 0; i < tags_to_separate.size(); ++i) {
                             if (tag_dbl_accs[tags_to_separate[i][0]].const_scalar_attribute(tt) ==
