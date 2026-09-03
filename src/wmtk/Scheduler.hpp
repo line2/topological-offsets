@@ -149,10 +149,42 @@ public:
      */
     void set_early_stop_after_consecutive_failures(int64_t n) { m_early_stop = n; }
 
+    /**
+     * @brief Instrumentation: when set, the parallel prefilter evaluates this
+     * invariant first and counts how many candidates fail it versus failing
+     * the remaining before-invariants. Read via probe_fail_count()/
+     * probe_other_fail_count() after the run.
+     */
+    void set_probe_invariant(std::shared_ptr<invariants::Invariant> inv)
+    {
+        m_probe_invariant = std::move(inv);
+        m_probe_fails = 0;
+        m_probe_other_fails = 0;
+    }
+    int64_t probe_fail_count() const { return m_probe_fails; }
+    int64_t probe_other_fail_count() const { return m_probe_other_fails; }
+
+    /**
+     * @brief Instrumentation: evaluate each probe invariant on all
+     * candidates (measurement only, does not change behavior) and count
+     * individual failures. Read via probe_detail_counts().
+     */
+    void set_probe_invariants(std::vector<std::shared_ptr<invariants::Invariant>> invs)
+    {
+        m_probe_invariants = std::move(invs);
+        m_probe_detail_counts.assign(m_probe_invariants.size(), 0);
+    }
+    const std::vector<int64_t>& probe_detail_counts() const { return m_probe_detail_counts; }
+
 private:
     SchedulerStats m_stats;
     std::optional<size_t> m_update_frequency = {};
     int64_t m_early_stop = 0;
+    std::shared_ptr<invariants::Invariant> m_probe_invariant = nullptr;
+    int64_t m_probe_fails = 0;
+    int64_t m_probe_other_fails = 0;
+    std::vector<std::shared_ptr<invariants::Invariant>> m_probe_invariants;
+    std::vector<int64_t> m_probe_detail_counts;
 
     void log(const size_t total);
     void log(const SchedulerStats& stats, const size_t total);

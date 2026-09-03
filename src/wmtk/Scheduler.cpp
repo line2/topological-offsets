@@ -148,6 +148,24 @@ SchedulerStats Scheduler::run_operation_on_all_parallel_prefilter(operations::Op
     // Phase 1: parallel read-only prefilter (validity + before-invariants).
     // The mesh must not be mutated during this phase; each candidate is
     // re-validated at execution time below.
+    // detail probes: measure each invariant separately (no behavior change)
+    if (!m_probe_invariants.empty()) {
+        std::vector<std::atomic<int64_t>> counts(m_probe_invariants.size());
+        for (auto& c : counts) c = 0;
+        tbb::parallel_for(tbb::blocked_range<int64_t>(0, (int64_t)simplices.size()), [&](const auto& r) {
+            for (int64_t i = r.begin(); i < r.end(); ++i) {
+                for (size_t k = 0; k < m_probe_invariants.size(); ++k) {
+                    if (!m_probe_invariants[k]->before(simplices[i])) {
+                        ++counts[k];
+                    }
+                }
+            }
+        });
+        for (size_t k = 0; k < counts.size(); ++k) {
+            m_probe_detail_counts[k] = counts[k].load();
+        }
+    }
+
     std::vector<char> keep(simplices.size(), 0);
     {
         POLYSOLVE_SCOPED_STOPWATCH("Parallel prefilter", res.prefilter_time, logger());
@@ -160,12 +178,33 @@ SchedulerStats Scheduler::run_operation_on_all_parallel_prefilter(operations::Op
                 }
             });
         } else {
-            tbb::parallel_for(tbb::blocked_range<int64_t>(0, n), [&](const auto& r) {
-                for (int64_t i = r.begin(); i < r.end(); ++i) {
-                    const int64_t idx = order[i].first;
-                    keep[idx] = op.prefilter(simplices[idx]) ? char(1) : char(0);
-                }
-            });
+            if (m_probe_invariant) {
+                std::atomic<int64_t> probe_fails{0};
+                std::atomic<int64_t> other_fails{0};
+                tbb::parallel_for(tbb::blocked_range<int64_t>(0, n), [&](const auto& r) {
+                    for (int64_t i = r.begin(); i < r.end(); ++i) {
+                        const int64_t idx = order[i].first;
+                        if (!m_probe_invariant->before(simplices[idx])) {
+                            ++probe_fails;
+                            keep[idx] = char(0);
+                        } else if (!op.prefilter(simplices[idx])) {
+                            ++other_fails;
+                            keep[idx] = char(0);
+                        } else {
+                            keep[idx] = char(1);
+                        }
+                    }
+                });
+                m_probe_fails += probe_fails.load();
+                m_probe_other_fails += other_fails.load();
+            } else {
+                tbb::parallel_for(tbb::blocked_range<int64_t>(0, n), [&](const auto& r) {
+                    for (int64_t i = r.begin(); i < r.end(); ++i) {
+                        const int64_t idx = order[i].first;
+                        keep[idx] = op.prefilter(simplices[idx]) ? char(1) : char(0);
+                    }
+                });
+            }
         }
     }
 

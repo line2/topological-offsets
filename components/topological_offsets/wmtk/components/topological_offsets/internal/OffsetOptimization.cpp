@@ -1853,14 +1853,30 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
         SchedulerStats pass_stats;
 
         logger().info("Update target edge lengths and ROI.");
+        std::vector<std::shared_ptr<wmtk::invariants::Invariant>> probes{
+            m_embedding_todo_larger,
+            m_embedding_todo_smaller,
+            nullptr};
         m_embedding_target_edge_length_transfer->run_on_all();
         // tel_update();
         roi_update();
 
         logger().info("Perform operations.");
+        const bool probe_failures = (std::getenv("WMTK_PROBE_FAILURES") != nullptr);
         int jj = 0;
         for (auto& op : ops) {
+            if (probe_failures && jj < (int)probes.size() && probes[jj]) {
+                scheduler.set_probe_invariant(probes[jj]);
+            }
             auto stats = scheduler.run_operation_on_all_parallel_prefilter(*op);
+            if (probe_failures && jj < (int)probes.size() && probes[jj]) {
+                logger().info(
+                    "PROBE {}: todo-type fails {} / other fails {} / total {}",
+                    ops_name[jj],
+                    scheduler.probe_fail_count(),
+                    scheduler.probe_other_fail_count(),
+                    stats.number_of_performed_operations());
+            }
             pass_stats += stats;
             logger().info(
                 "Executed {}, {} ops (S/F) {}/{}. Time: executing: {}",
@@ -2175,12 +2191,60 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
         SchedulerStats pass_stats;
 
         logger().info("Update target edge lengths.");
+        std::vector<std::shared_ptr<wmtk::invariants::Invariant>> probes{
+            m_offset_todo_larger,
+            m_offset_todo_smaller,
+            nullptr};
         m_offset_target_edge_length_transfer->run_on_all();
 
         logger().info("Perform operations.");
+        const bool probe_failures = (std::getenv("WMTK_PROBE_FAILURES") != nullptr);
         int jj = 0;
         for (auto& op : ops) {
+            if (probe_failures && jj < (int)probes.size() && probes[jj]) {
+                scheduler.set_probe_invariant(probes[jj]);
+            } else {
+                scheduler.set_probe_invariant(nullptr);
+            }
+            if (probe_failures && jj == 1) {
+                // detailed per-invariant measurement for the embedding collapse pass
+                scheduler.set_probe_invariants({
+                    m_embedding_todo_smaller,
+                    m_embedding_roi_invariant,
+                    m_embedding_no_child_invariants,
+                    m_embedding_separate_substructures_invariant,
+                    m_link_conditions,
+                    m_embedding_inversion_invariant,
+                    std::make_shared<wmtk::invariants::MaxFunctionInvariant>(
+                        PrimitiveType::Tetrahedron,
+                        m_embedding_amips),
+                });
+            }
             auto stats = scheduler.run_operation_on_all_parallel_prefilter(*op);
+            if (probe_failures && jj < (int)probes.size() && probes[jj]) {
+                logger().info(
+                    "PROBE {}: todo-type fails {} / other fails {} / total {}",
+                    ops_name[jj],
+                    scheduler.probe_fail_count(),
+                    scheduler.probe_other_fail_count(),
+                    stats.number_of_performed_operations());
+            }
+            if (probe_failures && jj == 1) {
+                const std::vector<std::string> probe_names{
+                    "todo_smaller",
+                    "roi",
+                    "no_child",
+                    "separate_substructures",
+                    "link_conditions",
+                    "inversion",
+                    "amips_max",
+                };
+                const auto& cs = scheduler.probe_detail_counts();
+                for (size_t k = 0; k < cs.size(); ++k) {
+                    logger().info("PROBE-DETAIL {}: {} fails {}", ops_name[jj], probe_names[k], cs[k]);
+                }
+                scheduler.set_probe_invariants({}); // clear to avoid slowing later passes
+            }
             pass_stats += stats;
             logger().info(
                 "Executed {}, {} ops (S/F) {}/{}. Time: executing: {}",
