@@ -56,6 +56,9 @@
 #include "utils/is_tet_in_offset.hpp"
 #include "utils/mean_ratio_metric.hpp"
 #include "utils/normal_angle.hpp"
+#include <tbb/combinable.h>
+#include <tbb/parallel_for.h>
+
 #include "utils/write_mesh.hpp"
 
 
@@ -2305,18 +2308,44 @@ std::vector<double> OffsetOptimization::get_error_metrics()
     double nd_avg = 0;
     double nd_max = std::numeric_limits<double>::lowest();
 
-    for (const Tuple& t : triangles) {
-        const double mrm = mrm_acc.const_scalar_attribute(t);
-        mrm_avg += mrm;
-        mrm_min = std::min(mrm_min, mrm);
+    struct TriMetrics {
+        double mrm_avg = 0;
+        double mrm_min = std::numeric_limits<double>::max();
+        double dist_avg = 0;
+        double dist_max = std::numeric_limits<double>::lowest();
+        double nd_avg = 0;
+        double nd_max = std::numeric_limits<double>::lowest();
+    };
+    {
+        tbb::combinable<TriMetrics> tri_accs;
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)triangles.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                TriMetrics& a = tri_accs.local();
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& t = triangles[i];
+                    const double mrm = mrm_acc.const_scalar_attribute(t);
+                    a.mrm_avg += mrm;
+                    a.mrm_min = std::min(a.mrm_min, mrm);
 
-        const double dist_err = std::abs(dist_acc.const_scalar_attribute(t) - m_offset_distance);
-        face_dist_err_avg += dist_err;
-        face_dist_err_max = std::max(face_dist_err_max, dist_err);
+                    const double dist_err =
+                        std::abs(dist_acc.const_scalar_attribute(t) - m_offset_distance);
+                    a.dist_avg += dist_err;
+                    a.dist_max = std::max(a.dist_max, dist_err);
 
-        const double nd = nd_acc.const_scalar_attribute(t);
-        nd_avg += nd;
-        nd_max = std::max(nd_max, nd);
+                    const double nd = nd_acc.const_scalar_attribute(t);
+                    a.nd_avg += nd;
+                    a.nd_max = std::max(a.nd_max, nd);
+                }
+            });
+        tri_accs.combine_each([&](const TriMetrics& a) {
+            mrm_avg += a.mrm_avg;
+            mrm_min = std::min(mrm_min, a.mrm_min);
+            face_dist_err_avg += a.dist_avg;
+            face_dist_err_max = std::max(face_dist_err_max, a.dist_max);
+            nd_avg += a.nd_avg;
+            nd_max = std::max(nd_max, a.nd_max);
+        });
     }
 
     mrm_avg /= triangles.size();
@@ -2327,13 +2356,26 @@ std::vector<double> OffsetOptimization::get_error_metrics()
     double v_rel_adapted_dist_err_avg = 0;
     double v_rel_adapted_dist_err_max = std::numeric_limits<double>::lowest();
     const std::vector<Tuple> vertices = m_offset_mesh->get_all(PrimitiveType::Vertex);
-    for (const Tuple& t : vertices) {
-        const auto p = pos_acc.const_vector_attribute(t);
-        const auto [sq_dist, od] = m_input_bvh->sq_dist_and_offset_distance(p);
-        const double dist = std::sqrt(sq_dist);
-        const double rel_dist = std::abs(dist - od) / m_offset_distance;
-        v_rel_adapted_dist_err_avg += rel_dist;
-        v_rel_adapted_dist_err_max = std::max(v_rel_adapted_dist_err_max, rel_dist);
+    {
+        tbb::combinable<std::pair<double, double>> v_accs; // (sum, max)
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)vertices.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto& a = v_accs.local();
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& t = vertices[i];
+                    const auto p = pos_acc.const_vector_attribute(t);
+                    const auto [sq_dist, od] = m_input_bvh->sq_dist_and_offset_distance(p);
+                    const double dist = std::sqrt(sq_dist);
+                    const double rel_dist = std::abs(dist - od) / m_offset_distance;
+                    a.first += rel_dist;
+                    a.second = std::max(a.second, rel_dist);
+                }
+            });
+        v_accs.combine_each([&](const std::pair<double, double>& a) {
+            v_rel_adapted_dist_err_avg += a.first;
+            v_rel_adapted_dist_err_max = std::max(v_rel_adapted_dist_err_max, a.second);
+        });
     }
 
     v_rel_adapted_dist_err_avg /= vertices.size();
@@ -2383,13 +2425,15 @@ void OffsetOptimization::roi_update()
 
     // set all tags to 0
     // tag all tets with high energy
-    for (const Tuple& t : tets) {
-        if (amips_acc.const_scalar_attribute(t) > 100) {
-            roi_acc.scalar_attribute(t) = 1;
-        } else {
-            roi_acc.scalar_attribute(t) = 0;
-        }
-    }
+    tbb::parallel_for(
+        tbb::blocked_range<int64_t>(0, (int64_t)tets.size()),
+        [&](const tbb::blocked_range<int64_t>& r) {
+            for (int64_t i = r.begin(); i < r.end(); ++i) {
+                const Tuple& t = tets[i];
+                roi_acc.scalar_attribute(t) =
+                    (amips_acc.const_scalar_attribute(t) > 100) ? 1 : 0;
+            }
+        });
 
     // spread tag to neighbors
     for (int64_t i = 1; i < 3; ++i) {

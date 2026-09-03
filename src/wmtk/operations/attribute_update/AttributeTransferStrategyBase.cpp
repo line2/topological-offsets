@@ -1,5 +1,6 @@
 
 #include "AttributeTransferStrategyBase.hpp"
+#include <tbb/parallel_for.h>
 #include <wmtk/Mesh.hpp>
 #include <wmtk/simplex/neighbors_single_dimension.hpp>
 
@@ -21,9 +22,13 @@ void AttributeTransferStrategyBase::run_on_all() const
     const PrimitiveType pt = m_handle.primitive_type();
     auto tuples = m_handle.mesh().get_all(pt);
 
-    for (const Tuple& t : tuples) {
-        run(simplex::Simplex(m_handle.mesh(), pt, t));
-    }
+    tbb::parallel_for(
+        tbb::blocked_range<int64_t>(0, (int64_t)tuples.size()),
+        [&](const tbb::blocked_range<int64_t>& r) {
+            for (int64_t i = r.begin(); i < r.end(); ++i) {
+                run(simplex::Simplex(m_handle.mesh(), pt, tuples[i]));
+            }
+        });
 }
 
 std::vector<Tuple> AttributeTransferStrategyBase::get_parent_simplices(

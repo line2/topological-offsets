@@ -20,6 +20,10 @@
 #include <wmtk/components/regular_space/regular_space.hpp>
 
 #include "utils/bvh_to_mesh_index_map.hpp"
+
+#include <tbb/combinable.h>
+#include <tbb/parallel_for.h>
+#include <atomic>
 #include "utils/is_tet_in_offset.hpp"
 #include "utils/tet_conains_connected_component.hpp"
 #include "utils/write_mesh.hpp"
@@ -184,13 +188,20 @@ void TopologicalOffsetGenerator::tag_tets_as_inside(
     auto within_od_acc = m_mesh.create_accessor<int64_t>(within_od_handle);
     auto tet_touches_boundary_acc = m_mesh.create_accessor<int64_t>(tet_touches_boundary_handle);
 
-    for (const Tuple& t : m_mesh.get_all(m_pt_top)) {
-        const simplex::Simplex tet(m_mesh, m_pt_top, t);
-        if (tet_touches_boundary(tet)) {
-            tet_touches_boundary_acc.scalar_attribute(t) = 1;
-        } else {
-            tet_touches_boundary_acc.scalar_attribute(t) = 0;
-        }
+    {
+        const auto tets_ttb = m_mesh.get_all(m_pt_top);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)tets_ttb.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto tet_touches_boundary_acc_local =
+                    m_mesh.create_accessor<int64_t>(tet_touches_boundary_handle);
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& t = tets_ttb[i];
+                    const simplex::Simplex tet(m_mesh, m_pt_top, t);
+                    tet_touches_boundary_acc_local.scalar_attribute(t) =
+                        tet_touches_boundary(tet) ? 1 : 0;
+                }
+            });
     }
 
     auto visited_vertex_acc = m_mesh.create_accessor<int64_t>(visited_vertex_handle);
@@ -515,13 +526,20 @@ void TopologicalOffsetGenerator::adapt_offset_distance()
     auto within_od_acc = m_mesh.create_accessor<int64_t>(within_od_handle);
     auto tet_touches_boundary_acc = m_mesh.create_accessor<int64_t>(tet_touches_boundary_handle);
 
-    for (const Tuple& t : m_mesh.get_all(m_pt_top)) {
-        const simplex::Simplex tet(m_mesh, m_pt_top, t);
-        if (tet_touches_boundary(tet)) {
-            tet_touches_boundary_acc.scalar_attribute(t) = 1;
-        } else {
-            tet_touches_boundary_acc.scalar_attribute(t) = 0;
-        }
+    {
+        const auto tets_ttb = m_mesh.get_all(m_pt_top);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)tets_ttb.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto tet_touches_boundary_acc_local =
+                    m_mesh.create_accessor<int64_t>(tet_touches_boundary_handle);
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& t = tets_ttb[i];
+                    const simplex::Simplex tet(m_mesh, m_pt_top, t);
+                    tet_touches_boundary_acc_local.scalar_attribute(t) =
+                        tet_touches_boundary(tet) ? 1 : 0;
+                }
+            });
     }
 
     auto visited_vertex_acc = m_mesh.create_accessor<int64_t>(visited_vertex_handle);
@@ -530,10 +548,21 @@ void TopologicalOffsetGenerator::adapt_offset_distance()
     auto v_dist_acc = m_mesh.create_accessor<double>(v_dist);
     auto v_inside_acc = m_mesh.create_accessor<int64_t>(v_inside);
 
-    for (const Tuple& t : m_mesh.get_all(PrimitiveType::Vertex)) {
-        const auto p = pos_acc.const_vector_attribute(t);
-        auto [sq_dist, od] = m_bvh->sq_dist_and_offset_distance(p);
-        v_tet_offset_distance_acc.scalar_attribute(t) = od;
+    {
+        const auto verts_od = m_mesh.get_all(PrimitiveType::Vertex);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)verts_od.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto pos_acc_local = m_mesh.create_const_accessor<double>(m_pos_handle);
+                auto v_od_acc_local =
+                    m_mesh.create_accessor<double>(v_tet_offset_distance_handle);
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& t = verts_od[i];
+                    const auto p = pos_acc_local.const_vector_attribute(t);
+                    auto [sq_dist, od] = m_bvh->sq_dist_and_offset_distance(p);
+                    v_od_acc_local.scalar_attribute(t) = od;
+                }
+            });
     }
 
     auto update_offset_distance_jacobian = [&]() -> bool {
@@ -541,12 +570,21 @@ void TopologicalOffsetGenerator::adapt_offset_distance()
         const auto vertices = m_mesh.get_all(PrimitiveType::Vertex);
 
         // reset visisted tags
-        for (const Tuple& t : vertices) {
-            const auto p = pos_acc.const_vector_attribute(t);
-            auto [sq_dist, od] = m_bvh->sq_dist_and_offset_distance(p);
-            v_tet_offset_distance_acc.scalar_attribute(t) = od;
-            visited_vertex_acc.scalar_attribute(t) = 0;
-        }
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)vertices.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto pos_acc_local = m_mesh.create_const_accessor<double>(m_pos_handle);
+                auto v_od_acc_local =
+                    m_mesh.create_accessor<double>(v_tet_offset_distance_handle);
+                auto visited_acc_local = m_mesh.create_accessor<int64_t>(visited_vertex_handle);
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& t = vertices[i];
+                    const auto p = pos_acc_local.const_vector_attribute(t);
+                    auto [sq_dist, od] = m_bvh->sq_dist_and_offset_distance(p);
+                    v_od_acc_local.scalar_attribute(t) = od;
+                    visited_acc_local.scalar_attribute(t) = 0;
+                }
+            });
 
         logger().info("Check for offset intersections with advancing front");
         bool found_bad_tet = false;
@@ -811,13 +849,20 @@ void TopologicalOffsetGenerator::expand_topological_offset_input()
     auto within_od_acc = m_mesh.create_accessor<int64_t>(within_od_handle);
     auto tet_touches_boundary_acc = m_mesh.create_accessor<int64_t>(tet_touches_boundary_handle);
 
-    for (const Tuple& t : m_mesh.get_all(m_pt_top)) {
-        const simplex::Simplex tet(m_mesh, m_pt_top, t);
-        if (tet_touches_boundary(tet)) {
-            tet_touches_boundary_acc.scalar_attribute(t) = 1;
-        } else {
-            tet_touches_boundary_acc.scalar_attribute(t) = 0;
-        }
+    {
+        const auto tets_ttb = m_mesh.get_all(m_pt_top);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)tets_ttb.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto tet_touches_boundary_acc_local =
+                    m_mesh.create_accessor<int64_t>(tet_touches_boundary_handle);
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& t = tets_ttb[i];
+                    const simplex::Simplex tet(m_mesh, m_pt_top, t);
+                    tet_touches_boundary_acc_local.scalar_attribute(t) =
+                        tet_touches_boundary(tet) ? 1 : 0;
+                }
+            });
     }
 
     logger().info("Expand topological offset");
@@ -857,13 +902,20 @@ void TopologicalOffsetGenerator::expand_finite_offset()
     auto within_od_acc = m_mesh.create_accessor<int64_t>(within_od_handle);
     auto tet_touches_boundary_acc = m_mesh.create_accessor<int64_t>(tet_touches_boundary_handle);
 
-    for (const Tuple& t : m_mesh.get_all(m_pt_top)) {
-        const simplex::Simplex tet(m_mesh, m_pt_top, t);
-        if (tet_touches_boundary(tet)) {
-            tet_touches_boundary_acc.scalar_attribute(t) = 1;
-        } else {
-            tet_touches_boundary_acc.scalar_attribute(t) = 0;
-        }
+    {
+        const auto tets_ttb = m_mesh.get_all(m_pt_top);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)tets_ttb.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto tet_touches_boundary_acc_local =
+                    m_mesh.create_accessor<int64_t>(tet_touches_boundary_handle);
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& t = tets_ttb[i];
+                    const simplex::Simplex tet(m_mesh, m_pt_top, t);
+                    tet_touches_boundary_acc_local.scalar_attribute(t) =
+                        tet_touches_boundary(tet) ? 1 : 0;
+                }
+            });
     }
 
     logger().info("Expand finite offset");
@@ -926,13 +978,20 @@ void TopologicalOffsetGenerator::expand_topological_offset_post()
     auto within_od_acc = m_mesh.create_accessor<int64_t>(within_od_handle);
     auto tet_touches_boundary_acc = m_mesh.create_accessor<int64_t>(tet_touches_boundary_handle);
 
-    for (const Tuple& t : m_mesh.get_all(m_pt_top)) {
-        const simplex::Simplex tet(m_mesh, m_pt_top, t);
-        if (tet_touches_boundary(tet)) {
-            tet_touches_boundary_acc.scalar_attribute(t) = 1;
-        } else {
-            tet_touches_boundary_acc.scalar_attribute(t) = 0;
-        }
+    {
+        const auto tets_ttb = m_mesh.get_all(m_pt_top);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)tets_ttb.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto tet_touches_boundary_acc_local =
+                    m_mesh.create_accessor<int64_t>(tet_touches_boundary_handle);
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& t = tets_ttb[i];
+                    const simplex::Simplex tet(m_mesh, m_pt_top, t);
+                    tet_touches_boundary_acc_local.scalar_attribute(t) =
+                        tet_touches_boundary(tet) ? 1 : 0;
+                }
+            });
     }
 
     logger().info("Expand topological offset post");
@@ -944,24 +1003,34 @@ void TopologicalOffsetGenerator::expand_topological_offset_post()
     regularize(false);
 
     // tag boundary of "input" as offset triangles
-    for (const Tuple& face_tuple : m_mesh.get_all(m_pt_face)) {
-        if (m_mesh.is_boundary(m_pt_face, face_tuple)) {
-            continue;
-        }
+    {
+        const auto faces_ot = m_mesh.get_all(m_pt_face);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)faces_ot.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& face_tuple = faces_ot[i];
+                    if (m_mesh.is_boundary(m_pt_face, face_tuple)) {
+                        continue;
+                    }
 
-        if (tag_accs.at(m_pt_face).const_scalar_attribute(face_tuple) != m_inside_tag) {
-            continue;
-        }
+                    if (tag_accs.at(m_pt_face).const_scalar_attribute(face_tuple) !=
+                        m_inside_tag) {
+                        continue;
+                    }
 
-        const simplex::Simplex face_simplex(m_mesh, m_pt_face, face_tuple);
-        const auto top_tuples = simplex::top_dimension_cofaces_tuples(m_mesh, face_simplex);
-        assert(top_tuples.size() == 2);
-        for (const Tuple& tt : top_tuples) {
-            if (tag_accs.at(m_pt_top).const_scalar_attribute(tt) == m_outside_tag) {
-                tag_accs.at(m_pt_face).scalar_attribute(face_tuple) = m_offset_tag;
-                break;
-            }
-        }
+                    const simplex::Simplex face_simplex(m_mesh, m_pt_face, face_tuple);
+                    const auto top_tuples =
+                        simplex::top_dimension_cofaces_tuples(m_mesh, face_simplex);
+                    assert(top_tuples.size() == 2);
+                    for (const Tuple& tt : top_tuples) {
+                        if (tag_accs.at(m_pt_top).const_scalar_attribute(tt) == m_outside_tag) {
+                            tag_accs.at(m_pt_face).scalar_attribute(face_tuple) = m_offset_tag;
+                            break;
+                        }
+                    }
+                }
+            });
     }
 
     if (m_debug_print) {
@@ -1077,41 +1146,53 @@ attribute::MeshAttributeHandle TopologicalOffsetGenerator::tag_offset_tets()
     auto tog_tet_acc = m_mesh.create_const_accessor<int64_t>(m_tag_handles.at(m_pt_top));
     auto tet_acc = m_mesh.create_accessor<int64_t>(m_offset_tag_handle);
 
-    bool offset_tet_found = false;
+    std::atomic<bool> offset_tet_found{false};
 
-    for (const Tuple& t : m_mesh.get_all(m_mesh.top_simplex_type())) {
-        if (tet_acc.const_scalar_attribute(t) != 0) {
-            continue;
-        }
+    {
+        const auto tets_ot = m_mesh.get_all(m_mesh.top_simplex_type());
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)tets_ot.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto tog_v_acc_local =
+                    m_mesh.create_const_accessor<int64_t>(m_tag_handles.at(PrimitiveType::Vertex));
+                auto tog_tet_acc_local =
+                    m_mesh.create_accessor<int64_t>(m_tag_handles.at(m_pt_top));
+                auto tet_acc_local = m_mesh.create_accessor<int64_t>(m_offset_tag_handle);
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& t = tets_ot[i];
+                    if (tet_acc_local.const_scalar_attribute(t) != 0) {
+                        continue;
+                    }
 
-        if (tog_tet_acc.const_scalar_attribute(t) == m_inside_tag) {
-            // tet_acc.scalar_attribute(t) = offset_tag_value;
-            continue;
-        }
+                    if (tog_tet_acc_local.const_scalar_attribute(t) == m_inside_tag) {
+                        continue;
+                    }
 
-        const auto vertices = simplex::faces_single_dimension_tuples(
-            m_mesh,
-            simplex::Simplex(m_mesh, m_mesh.top_simplex_type(), t),
-            PrimitiveType::Vertex);
+                    const auto vertices = simplex::faces_single_dimension_tuples(
+                        m_mesh,
+                        simplex::Simplex(m_mesh, m_mesh.top_simplex_type(), t),
+                        PrimitiveType::Vertex);
 
-        int64_t offset_vertices = 0;
-        int64_t input_vertices = 0;
-        for (const Tuple& v : vertices) {
-            const int64_t v_tag = tog_v_acc.const_scalar_attribute(v);
-            if (v_tag == m_inside_tag) {
-                input_vertices++;
-            } else if (v_tag == m_offset_tag) {
-                offset_vertices++;
-            } else {
-                break;
-            }
-        }
+                    int64_t offset_vertices = 0;
+                    int64_t input_vertices = 0;
+                    for (const Tuple& v : vertices) {
+                        const int64_t v_tag = tog_v_acc_local.const_scalar_attribute(v);
+                        if (v_tag == m_inside_tag) {
+                            input_vertices++;
+                        } else if (v_tag == m_offset_tag) {
+                            offset_vertices++;
+                        } else {
+                            break;
+                        }
+                    }
 
-        if (offset_vertices > 0 && input_vertices > 0) {
-            tet_acc.scalar_attribute(t) = m_offset_tag;
-            tog_tet_acc.scalar_attribute(t) = m_inside_tag;
-            offset_tet_found = true;
-        }
+                    if (offset_vertices > 0 && input_vertices > 0) {
+                        tet_acc_local.scalar_attribute(t) = m_offset_tag;
+                        tog_tet_acc_local.scalar_attribute(t) = m_inside_tag;
+                        offset_tet_found = true;
+                    }
+                }
+            });
     }
 
     regularize(false);
@@ -1200,19 +1281,26 @@ void TopologicalOffsetGenerator::update_within_od_conservative(
     using internal::utils::is_tet_in_offset_conservative_sampling;
     auto within_od_acc = m_mesh.create_accessor<int64_t>(within_od_handle);
 
-    for (const Tuple& t : m_mesh.get_all(m_pt_top)) {
-        const simplex::Simplex tet(m_mesh, m_pt_top, t);
-        if (is_tet_in_offset_conservative_sampling(
-                bbox,
-                m_pos_handle,
-                *m_bvh,
-                tet,
-                0.1 * m_offset_distance)) {
-            // if (is_tet_in_offset(m_pos_handle, bvh, tet)) {
-            within_od_acc.scalar_attribute(t) = 1;
-        } else {
-            within_od_acc.scalar_attribute(t) = 0;
-        }
+    {
+        const auto tets_wod = m_mesh.get_all(m_pt_top);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)tets_wod.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto within_od_acc_local = m_mesh.create_accessor<int64_t>(within_od_handle);
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& t = tets_wod[i];
+                    const simplex::Simplex tet(m_mesh, m_pt_top, t);
+                    within_od_acc_local.scalar_attribute(t) =
+                        is_tet_in_offset_conservative_sampling(
+                            bbox,
+                            m_pos_handle,
+                            *m_bvh,
+                            tet,
+                            0.1 * m_offset_distance)
+                            ? 1
+                            : 0;
+                }
+            });
     }
 }
 
@@ -1223,19 +1311,26 @@ void TopologicalOffsetGenerator::update_within_od_aggressive(
     using internal::utils::is_tet_in_offset_aggressive_sampling;
     auto within_od_acc = m_mesh.create_accessor<int64_t>(within_od_handle);
 
-    for (const Tuple& t : m_mesh.get_all(m_pt_top)) {
-        const simplex::Simplex tet(m_mesh, m_pt_top, t);
-        if (is_tet_in_offset_aggressive_sampling(
-                bbox,
-                m_pos_handle,
-                *m_bvh,
-                tet,
-                0.1 * m_offset_distance)) {
-            // if (is_tet_in_offset(m_pos_handle, bvh, tet)) {
-            within_od_acc.scalar_attribute(t) = 1;
-        } else {
-            within_od_acc.scalar_attribute(t) = 0;
-        }
+    {
+        const auto tets_wod = m_mesh.get_all(m_pt_top);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)tets_wod.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto within_od_acc_local = m_mesh.create_accessor<int64_t>(within_od_handle);
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& t = tets_wod[i];
+                    const simplex::Simplex tet(m_mesh, m_pt_top, t);
+                    within_od_acc_local.scalar_attribute(t) =
+                        is_tet_in_offset_aggressive_sampling(
+                            bbox,
+                            m_pos_handle,
+                            *m_bvh,
+                            tet,
+                            0.1 * m_offset_distance)
+                            ? 1
+                            : 0;
+                }
+            });
     }
 }
 
@@ -1282,16 +1377,24 @@ void TopologicalOffsetGenerator::tag_topological_offset_tets(
     size_t q_front = 0;
     size_t q_back = 0;
 
-    for (const Tuple& tet_tuple : m_mesh.get_all(m_pt_top)) {
-        const simplex::Simplex tet(m_mesh, m_pt_top, tet_tuple);
-
-        if (!is_tet_in_topological_offset(tet, ignore_boundary)) {
-            continue;
-        }
-
-        q[q_back++] = tet_tuple;
-        if (q_back + 4 >= q.size()) {
-            q.resize(q.size() * 1.5);
+    {
+        const auto seed_tets = m_mesh.get_all(m_pt_top);
+        std::vector<char> is_seed(seed_tets.size(), 0);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)seed_tets.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const simplex::Simplex tet(m_mesh, m_pt_top, seed_tets[i]);
+                    is_seed[i] = is_tet_in_topological_offset(tet, ignore_boundary) ? 1 : 0;
+                }
+            });
+        for (size_t i = 0; i < seed_tets.size(); ++i) {
+            if (is_seed[i]) {
+                q[q_back++] = seed_tets[i];
+                if (q_back + 4 >= q.size()) {
+                    q.resize(q.size() * 1.5);
+                }
+            }
         }
     }
 
@@ -1370,30 +1473,46 @@ void TopologicalOffsetGenerator::tag_topological_offset_tets_through_face(
     size_t q_front = 0;
     size_t q_back = 0;
 
-    for (const Tuple& tet_tuple : m_mesh.get_all(m_pt_top)) {
-        const simplex::Simplex tet(m_mesh, m_pt_top, tet_tuple);
+    {
+        const auto seed_tets = m_mesh.get_all(m_pt_top);
+        tbb::combinable<std::vector<Tuple>> seed_queues;
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)seed_tets.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                std::vector<Tuple>& local_q = seed_queues.local();
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& tet_tuple = seed_tets[i];
+                    const simplex::Simplex tet(m_mesh, m_pt_top, tet_tuple);
 
-        if (tag_accs.at(m_pt_top).const_scalar_attribute(tet) == m_outside_tag) {
-            continue;
-        }
+                    if (tag_accs.at(m_pt_top).const_scalar_attribute(tet) == m_outside_tag) {
+                        continue;
+                    }
 
-        if (q_back + 4 >= q.size()) {
-            q.resize(q.size() * 1.5);
-        }
+                    const auto faces =
+                        simplex::faces_single_dimension_tuples(m_mesh, tet, m_pt_face);
+                    for (Tuple t : faces) {
+                        if (m_mesh.is_boundary(m_pt_face, t)) {
+                            continue;
+                        }
+                        t = m_mesh.switch_tuple(t, m_pt_top);
 
-        const auto faces = simplex::faces_single_dimension_tuples(m_mesh, tet, m_pt_face);
-        for (Tuple t : faces) {
-            if (m_mesh.is_boundary(m_pt_face, t)) {
-                continue;
+                        simplex::IdSimplex neighbor = m_mesh.get_id_simplex(t, m_pt_top);
+                        if (tag_accs.at(m_pt_top).const_scalar_attribute(neighbor) !=
+                            m_outside_tag) {
+                            continue;
+                        }
+                        local_q.push_back(m_mesh.get_tuple_from_id_simplex(neighbor));
+                    }
+                }
+            });
+        seed_queues.combine_each([&](const std::vector<Tuple>& v) {
+            for (const Tuple& t : v) {
+                if (q_back + 4 >= q.size()) {
+                    q.resize(q.size() * 1.5);
+                }
+                q[q_back++] = t;
             }
-            t = m_mesh.switch_tuple(t, m_pt_top);
-
-            simplex::IdSimplex neighbor = m_mesh.get_id_simplex(t, m_pt_top);
-            if (tag_accs.at(m_pt_top).const_scalar_attribute(neighbor) != m_outside_tag) {
-                continue;
-            }
-            q[q_back++] = m_mesh.get_tuple_from_id_simplex(neighbor);
-        }
+        });
     }
 
     // BFS on neighboring tets
@@ -1502,23 +1621,33 @@ void TopologicalOffsetGenerator::reset_tet_tags()
         tag_accs.emplace(pt, m_mesh.create_accessor<int64_t>(tag_handle));
     }
 
-    for (const Tuple& t : m_mesh.get_all(m_pt_top)) {
-        const simplex::Simplex tet(m_mesh, m_pt_top, t);
-        if (offset_tag_acc.const_scalar_attribute(t) == m_offset_tag) {
-            offset_tag_acc.scalar_attribute(t) = m_outside_tag;
-            tag_accs.at(m_pt_top).scalar_attribute(t) = m_outside_tag;
-            for (const simplex::Simplex& f : simplex::faces(m_mesh, tet)) {
-                if (m_mesh.simplex_is_in_child(input_mesh, f)) {
-                    continue;
+    {
+        const auto tets_rt = m_mesh.get_all(m_pt_top);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)tets_rt.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const Tuple& t = tets_rt[i];
+                    const simplex::Simplex tet(m_mesh, m_pt_top, t);
+                    if (offset_tag_acc.const_scalar_attribute(t) == m_offset_tag) {
+                        // note: concurrent writes from the two tets incident to a shared
+                        // face write the identical value, which is benign
+                        offset_tag_acc.scalar_attribute(t) = m_outside_tag;
+                        tag_accs.at(m_pt_top).scalar_attribute(t) = m_outside_tag;
+                        for (const simplex::Simplex& f : simplex::faces(m_mesh, tet)) {
+                            if (m_mesh.simplex_is_in_child(input_mesh, f)) {
+                                continue;
+                            }
+                            tag_accs.at(f.primitive_type()).scalar_attribute(f) = m_outside_tag;
+                        }
+                    }
                 }
-                tag_accs.at(f.primitive_type()).scalar_attribute(f) = m_outside_tag;
-            }
-        }
+            });
+    }
         //// DEBUG reset bad tet tag
         // if (tag_accs.at(pt_top).const_scalar_attribute(tet) == 3) {
         //     tag_accs.at(pt_top).scalar_attribute(tet) = m_outside_tag;
         // }
-    }
 }
 
 } // namespace wmtk::components
