@@ -41,6 +41,17 @@ public:
     virtual bool& use_random_priority() { return m_use_random_priority; }
 
     /**
+     * @brief Whether operator() wraps execution in an attribute scope.
+     *
+     * Scopes provide rollback on failure but their bookkeeping is expensive;
+     * operations that manage their own failure recovery (e.g. vertex
+     * smoothing that restores positions itself) can disable scopes, which
+     * also makes concurrent execution safer.
+     */
+    void set_use_scope(bool b) { m_use_scope = b; }
+    bool use_scope() const { return m_use_scope; }
+
+    /**
      * @brief Thread-safe, read-only pre-check (simplex validity + before-invariants).
      *
      * Used by the scheduler's parallel prefilter path. The mesh must not be
@@ -103,6 +114,7 @@ protected:
 private:
     Mesh& m_mesh;
     bool m_use_random_priority = false;
+    bool m_use_scope = true;
 
 
 protected:

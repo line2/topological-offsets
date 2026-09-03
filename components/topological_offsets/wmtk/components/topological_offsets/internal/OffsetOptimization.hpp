@@ -116,6 +116,10 @@ private:
     attribute::MeshAttributeHandle m_offset_vertex_converged_attribute;
     attribute::MeshAttributeHandle m_offset_face_converged_attribute;
 
+    // vertex color attributes for the coloring-based parallel scheduler
+    attribute::MeshAttributeHandle m_embedding_color_handle;
+    attribute::MeshAttributeHandle m_offset_color_handle;
+
 
     std::shared_ptr<operations::SingleAttributeTransferStrategy<double, double>>
         m_embedding_edge_length_transfer;

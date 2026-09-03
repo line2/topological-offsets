@@ -74,24 +74,38 @@ std::vector<simplex::Simplex> Operation::operator()(const simplex::Simplex& simp
 
     const auto simplex_resurrect = simplex;
 
-    auto scope = mesh().create_scope();
     assert(simplex.primitive_type() == primitive_type());
 
-    try {
+    if (m_use_scope) {
+        auto scope = mesh().create_scope();
+        try {
+            auto unmods = unmodified_primitives(simplex_resurrect);
+            auto mods = execute(simplex_resurrect);
+            if (!mods.empty()) { // success should be marked here
+                apply_attribute_transfer(mods);
+                if (after(unmods, mods)) {
+                    return mods; // scope destructor is called
+                }
+            }
+        } catch (const std::exception& e) {
+            scope.mark_failed();
+            throw e;
+        }
+        scope.mark_failed();
+        return {}; // scope destructor is called
+    } else {
+        // no rollback bookkeeping; the operation is responsible for keeping
+        // the mesh in a valid state on failure
         auto unmods = unmodified_primitives(simplex_resurrect);
         auto mods = execute(simplex_resurrect);
-        if (!mods.empty()) { // success should be marked here
+        if (!mods.empty()) {
             apply_attribute_transfer(mods);
             if (after(unmods, mods)) {
-                return mods; // scope destructor is called
+                return mods;
             }
         }
-    } catch (const std::exception& e) {
-        scope.mark_failed();
-        throw e;
+        return {};
     }
-    scope.mark_failed();
-    return {}; // scope destructor is called
 }
 
 bool Operation::prefilter(const simplex::Simplex& simplex) const

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <tbb/combinable.h>
 
 #include "internal/AttributeTransactionStack.hpp"
 namespace wmtk::attribute {
@@ -14,19 +15,20 @@ public:
     const internal::AttributeTransactionStack<T>& local() const;
 
 private:
-    // single stack so far
-    mutable internal::AttributeTransactionStack<T> m_stack;
+    // one transaction stack per thread so that concurrent operations keep
+    // their scope bookkeeping isolated
+    mutable tbb::combinable<internal::AttributeTransactionStack<T>> m_stacks;
 };
 
 
 template <typename T>
 inline internal::AttributeTransactionStack<T>& PerThreadAttributeScopeStacks<T>::local()
 {
-    return m_stack;
+    return m_stacks.local();
 }
 template <typename T>
 inline const internal::AttributeTransactionStack<T>& PerThreadAttributeScopeStacks<T>::local() const
 {
-    return m_stack;
+    return m_stacks.local();
 }
 } // namespace wmtk::attribute

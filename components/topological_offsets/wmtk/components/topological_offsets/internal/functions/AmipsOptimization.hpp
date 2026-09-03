@@ -2,6 +2,7 @@
 
 #include <SimpleBVH/BVH.hpp>
 #include <polysolve/Types.hpp>
+#include <tbb/combinable.h>
 #include <wmtk/function/Function.hpp>
 #include <wmtk/function/simplex/AMIPS.hpp>
 #include <wmtk/operations/AttributesUpdate.hpp>
@@ -41,7 +42,10 @@ public:
     }
 
 private:
-    std::shared_ptr<polysolve::nonlinear::Solver> m_solver;
+    // One solver per thread (solvers carry internal state and are not
+    // thread-safe); created lazily on first use of each thread.
+    tbb::combinable<std::shared_ptr<polysolve::nonlinear::Solver>> m_thread_solvers;
+    std::shared_ptr<polysolve::nonlinear::Solver> thread_solver();
     const attribute::MeshAttributeHandle& m_pos_handle;
     Mesh& m_mesh;
 

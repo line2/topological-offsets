@@ -20,6 +20,7 @@
 
 // #include <tbb/task_arena.h>
 #include <atomic>
+#include <cstdlib>
 
 
 #include <algorithm>
@@ -174,31 +175,68 @@ SchedulerStats Scheduler::run_operation_on_all_parallel_prefilter(operations::Op
 
         size_t total_simplices = simplices.size();
 
+        int64_t fails_since_last_success = 0;
+        int64_t executed = 0;
+        bool early_stopped = false;
+
+        // Early-stop backoff: only kicks in for passes whose success rate has
+        // collapsed (< 5%) and only after a long run of consecutive failures;
+        // remaining candidates are retried by later passes.
+        auto should_stop = [&]() {
+            return m_early_stop > 0 && fails_since_last_success >= m_early_stop &&
+                   executed >= 4 * m_early_stop &&
+                   res.number_of_successful_operations() * 20 < executed;
+        };
+
         if (op.use_random_priority()) {
             for (int64_t i = 0; i < (int64_t)simplices.size(); ++i) {
                 if (keep[i] == char(0)) {
+                    res.fail();
+                    res.prefiltered();
+                    continue;
+                }
+                if (early_stopped) {
                     res.fail();
                     continue;
                 }
                 log(res, total_simplices);
                 auto mods = op(simplices[i]);
-                if (mods.empty())
+                ++executed;
+                if (mods.empty()) {
                     res.fail();
-                else
+                    ++fails_since_last_success;
+                    if (should_stop()) {
+                        early_stopped = true;
+                    }
+                } else {
                     res.succeed();
+                    fails_since_last_success = 0;
+                }
             }
         } else {
             for (const auto& o : order) {
                 if (keep[o.first] == char(0)) {
                     res.fail();
+                    res.prefiltered();
+                    continue;
+                }
+                if (early_stopped) {
+                    res.fail();
                     continue;
                 }
                 log(res, total_simplices);
                 auto mods = op(simplices[o.first]);
-                if (mods.empty())
+                ++executed;
+                if (mods.empty()) {
                     res.fail();
-                else
+                    ++fails_since_last_success;
+                    if (should_stop()) {
+                        early_stopped = true;
+                    }
+                } else {
                     res.succeed();
+                    fails_since_last_success = 0;
+                }
             }
         }
         if (m_update_frequency) {
@@ -403,25 +441,6 @@ SchedulerStats Scheduler::run_operation_on_all_coloring(
 
         logger().info("Have {} colors among {} vertices", colored_simplices.size(), tups.size());
 
-        // debug code
-
-        {
-            for (const auto& v : tups) {
-                auto current_color = color_accessor.const_scalar_attribute(v);
-                if (current_color == -1) {
-                    std::cout << "vertex not assigned color!!!" << std::endl;
-                }
-
-                for (const auto& v_one_ring :
-                     simplex::k_ring(op.mesh(), simplex::Simplex::vertex(op.mesh(), v), 1)
-                         .simplex_vector(PrimitiveType::Vertex)) {
-                    if (current_color ==
-                        color_accessor.const_scalar_attribute(v_one_ring.tuple())) {
-                        std::cout << "adjacent vertices have same color!!!" << std::endl;
-                    }
-                }
-            }
-        }
     }
 
     logger().debug("Executing on {} simplices", tups.size());
@@ -432,6 +451,38 @@ SchedulerStats Scheduler::run_operation_on_all_coloring(
         // do sth or nothing
     }
 
+    const char* serial_mode = std::getenv("WMTK_COLORING_SERIAL");
+    bool force_serial = false;
+    if (serial_mode != nullptr) {
+        if (std::string(serial_mode) == "1") {
+            force_serial = true;
+        } else if (std::string(serial_mode) == "tet") {
+            force_serial = (op.mesh().top_simplex_type() == PrimitiveType::Tetrahedron);
+        } else if (std::string(serial_mode) == "tri") {
+            force_serial = (op.mesh().top_simplex_type() == PrimitiveType::Triangle);
+        }
+    }
+
+    // verify coloring validity (adjacent vertices must have different colors)
+    if (std::getenv("WMTK_COLORING_CHECK") != nullptr) {
+        int64_t conflicts = 0;
+        for (const auto& v : tups) {
+            const auto cv = color_accessor.const_scalar_attribute(v);
+            for (const auto& v_one_ring :
+                 simplex::link(op.mesh(), simplex::Simplex::vertex(op.mesh(), v), false)
+                     .simplex_vector(PrimitiveType::Vertex)) {
+                if (cv == color_accessor.const_scalar_attribute(v_one_ring.tuple())) {
+                    ++conflicts;
+                }
+            }
+        }
+        if (conflicts > 0) {
+            logger().error("COLORING CONFLICTS: {} adjacent same-color pairs", conflicts);
+        } else {
+            logger().info("coloring check passed");
+        }
+    }
+
 
     {
         POLYSOLVE_SCOPED_STOPWATCH("Executing operation", res.executing_time, logger());
@@ -440,6 +491,17 @@ SchedulerStats Scheduler::run_operation_on_all_coloring(
         std::atomic_int fail_cnt = 0;
 
         for (int64_t i = 0; i < colored_simplices.size(); ++i) {
+            if (force_serial) {
+                for (int64_t k = 0; k < (int64_t)colored_simplices[i].size(); ++k) {
+                    auto mods = op(colored_simplices[i][k]);
+                    if (mods.empty()) {
+                        fail_cnt++;
+                    } else {
+                        suc_cnt++;
+                    }
+                }
+                continue;
+            }
             tbb::parallel_for(
                 tbb::blocked_range<int64_t>(0, colored_simplices[i].size()),
                 [&](tbb::blocked_range<int64_t> r) {

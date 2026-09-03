@@ -29,6 +29,13 @@ public:
      */
     int64_t number_of_performed_operations() const { return m_num_op_success + m_num_op_fail; }
 
+    /**
+     * @brief Operations rejected by the parallel prefilter without execution.
+     *
+     * These are also counted as failed operations for compatibility.
+     */
+    int64_t number_of_prefiltered_operations() const { return m_num_prefiltered; }
+
     inline double total_time() const
     {
         return collecting_time + sorting_time + prefilter_time + executing_time;
@@ -36,11 +43,13 @@ public:
 
     inline void succeed() { ++m_num_op_success; }
     inline void fail() { ++m_num_op_fail; }
+    inline void prefiltered() { ++m_num_prefiltered; }
 
     inline void operator+=(const SchedulerStats& s)
     {
         m_num_op_success += s.m_num_op_success;
         m_num_op_fail += s.m_num_op_fail;
+        m_num_prefiltered += s.m_num_prefiltered;
 
         collecting_time += s.collecting_time;
         sorting_time += s.sorting_time;
@@ -86,6 +95,7 @@ public:
     // private:
     int64_t m_num_op_success = 0;
     int64_t m_num_op_fail = 0;
+    int64_t m_num_prefiltered = 0;
 
     void print_update_log(size_t total, spdlog::level::level_enum = spdlog::level::info) const;
 };
@@ -120,9 +130,18 @@ public:
 
     void set_update_frequency(std::optional<size_t>&& freq = {});
 
+    /**
+     * @brief Early-stop backoff for the parallel-prefilter variant: stop the
+     * serial execution phase once this many consecutively executed
+     * operations fail (0 disables). Remaining candidates are counted as
+     * failed and retried by later passes, mirroring prefilter rejections.
+     */
+    void set_early_stop_after_consecutive_failures(int64_t n) { m_early_stop = n; }
+
 private:
     SchedulerStats m_stats;
     std::optional<size_t> m_update_frequency = {};
+    int64_t m_early_stop = 0;
 
     void log(const size_t total);
     void log(const SchedulerStats& stats, const size_t total);

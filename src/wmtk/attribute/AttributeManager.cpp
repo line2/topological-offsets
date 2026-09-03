@@ -1,9 +1,22 @@
 #include "AttributeManager.hpp"
 
+#include <mutex>
+
 #include <spdlog/spdlog.h>
 #include <wmtk/io/MeshWriter.hpp>
 #include <wmtk/utils/Rational.hpp>
 namespace wmtk::attribute {
+
+namespace {
+// Scope bookkeeping (push/pop/rollback/level switches) mutates shared
+// per-attribute state; a single global lock serializes it so that
+// operations can run concurrently on disjoint mesh regions.
+std::mutex& scope_mutex()
+{
+    static std::mutex m;
+    return m;
+}
+} // namespace
 AttributeManager::AttributeManager(int64_t size)
     : m_char_attributes(size)
     , m_long_attributes(size)
@@ -191,6 +204,7 @@ std::string AttributeManager::get_name(
 
 void AttributeManager::push_scope()
 {
+    std::lock_guard<std::mutex> lock(scope_mutex());
     for (auto& ma : m_char_attributes) {
         ma.push_scope();
     }
@@ -206,6 +220,7 @@ void AttributeManager::push_scope()
 }
 void AttributeManager::pop_scope(bool apply_updates)
 {
+    std::lock_guard<std::mutex> lock(scope_mutex());
     for (auto& ma : m_char_attributes) {
         ma.pop_scope(apply_updates);
     }
@@ -222,6 +237,7 @@ void AttributeManager::pop_scope(bool apply_updates)
 
 void AttributeManager::rollback_current_scope()
 {
+    std::lock_guard<std::mutex> lock(scope_mutex());
     for (auto& ma : m_char_attributes) {
         ma.rollback_current_scope();
     }
@@ -238,6 +254,7 @@ void AttributeManager::rollback_current_scope()
 
 void AttributeManager::change_to_parent_scope() const
 {
+    std::lock_guard<std::mutex> lock(scope_mutex());
     for (auto& ma : m_char_attributes) {
         ma.change_to_parent_scope();
     }
@@ -254,6 +271,7 @@ void AttributeManager::change_to_parent_scope() const
 
 void AttributeManager::change_to_child_scope() const
 {
+    std::lock_guard<std::mutex> lock(scope_mutex());
     for (auto& ma : m_char_attributes) {
         ma.change_to_child_scope();
     }

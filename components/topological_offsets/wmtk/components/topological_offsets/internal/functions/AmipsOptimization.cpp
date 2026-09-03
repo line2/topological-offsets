@@ -32,11 +32,21 @@ AmipsOptimization::AmipsOptimization(attribute::MeshAttributeHandle& pos_handle)
 
 void AmipsOptimization::create_solver()
 {
-    m_solver = polysolve::nonlinear::Solver::create(
-        m_nonlinear_solver_params,
-        m_linear_solver_params,
-        1,
-        opt_logger());
+    // reset the per-thread solver pool so new parameters take effect
+    m_thread_solvers.clear();
+}
+
+std::shared_ptr<polysolve::nonlinear::Solver> AmipsOptimization::thread_solver()
+{
+    auto& s = m_thread_solvers.local();
+    if (!s) {
+        s = polysolve::nonlinear::Solver::create(
+            m_nonlinear_solver_params,
+            m_linear_solver_params,
+            1,
+            opt_logger());
+    }
+    return s;
 }
 
 
@@ -50,7 +60,7 @@ std::vector<simplex::Simplex> AmipsOptimization::execute(const simplex::Simplex&
 
     Eigen::VectorXd x = problem.initial_value();
     try {
-        m_solver->minimize(problem, x);
+        thread_solver()->minimize(problem, x);
 
     } catch (const std::exception&) {
         // PolySolve might fail but still returns a valid position

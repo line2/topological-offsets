@@ -169,6 +169,9 @@ void OffsetOptimization::init_embedding_optimization()
 {
     logger().info("Init embedding optimization");
 
+    m_embedding_color_handle =
+        m_mesh.register_attribute<int64_t>("offset_optimization_sched_color", PrimitiveType::Vertex, 1);
+
     //////////////////////////////////
     // Region of interest (roi)
     m_embedding_roi_attribute =
@@ -389,6 +392,11 @@ void OffsetOptimization::init_embedding_optimization()
 void OffsetOptimization::init_offset_optimization()
 {
     logger().info("Init offset optimization");
+
+    m_offset_color_handle = m_offset_mesh->register_attribute<int64_t>(
+        "offset_optimization_sched_color",
+        PrimitiveType::Vertex,
+        1);
 
     const PrimitiveType pt_face = get_primitive_type_from_id(m_mesh.top_cell_dimension() - 1);
 
@@ -1345,7 +1353,10 @@ void OffsetOptimization::init_offset_optimization()
 void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
 {
     std::vector<attribute::MeshAttributeHandle> none_attributes(
-        {m_embedding_edge_length_attribute, m_embedding_amips_attribute});
+        {m_embedding_edge_length_attribute,
+         m_embedding_amips_attribute,
+         m_embedding_color_handle,
+         m_offset_color_handle});
 
     auto add_transfers = [this](operations::Operation& op) {
         op.add_transfer_strategy(m_embedding_edge_length_transfer);
@@ -1803,6 +1814,7 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
     //////////////////////////////////
     // auto smooth = std::make_shared<operations::OptimizationSmoothing>(m_amips_energy);
     auto smooth = std::make_shared<operations::AmipsOptimization>(m_pos_handle);
+    const auto& smooth_color_handle = m_embedding_color_handle;
     auto solver_settings = smooth->nonlinear_solver_params();
     solver_settings["max_iterations"] = 2;
     smooth->set_nonlinear_solver_params(solver_settings);
@@ -1905,7 +1917,9 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
          m_embedding_edge_length_attribute,
          m_embedding_target_edge_length_attribute,
          m_embedding_amips_attribute,
-         m_embedding_roi_attribute});
+         m_embedding_roi_attribute,
+         m_offset_color_handle,
+         m_embedding_color_handle});
 
     auto add_transfers = [this](operations::Operation& op) {
         // op.add_transfer_strategy(m_offset_position_to_embedding_transfer);
@@ -2102,6 +2116,7 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
 
     // Smoothing with binary search for valid position
     auto smooth = std::make_shared<operations::AttributesUpdateWithFunction>(*m_offset_mesh);
+    const auto& smooth_color_handle = m_offset_color_handle;
     smooth->set_function(m_offset_smoothing_function);
 
     // Smoothing with optimization
