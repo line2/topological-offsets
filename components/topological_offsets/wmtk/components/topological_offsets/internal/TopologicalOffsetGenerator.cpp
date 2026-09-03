@@ -1621,33 +1621,23 @@ void TopologicalOffsetGenerator::reset_tet_tags()
         tag_accs.emplace(pt, m_mesh.create_accessor<int64_t>(tag_handle));
     }
 
-    {
-        const auto tets_rt = m_mesh.get_all(m_pt_top);
-        tbb::parallel_for(
-            tbb::blocked_range<int64_t>(0, (int64_t)tets_rt.size()),
-            [&](const tbb::blocked_range<int64_t>& r) {
-                for (int64_t i = r.begin(); i < r.end(); ++i) {
-                    const Tuple& t = tets_rt[i];
-                    const simplex::Simplex tet(m_mesh, m_pt_top, t);
-                    if (offset_tag_acc.const_scalar_attribute(t) == m_offset_tag) {
-                        // note: concurrent writes from the two tets incident to a shared
-                        // face write the identical value, which is benign
-                        offset_tag_acc.scalar_attribute(t) = m_outside_tag;
-                        tag_accs.at(m_pt_top).scalar_attribute(t) = m_outside_tag;
-                        for (const simplex::Simplex& f : simplex::faces(m_mesh, tet)) {
-                            if (m_mesh.simplex_is_in_child(input_mesh, f)) {
-                                continue;
-                            }
-                            tag_accs.at(f.primitive_type()).scalar_attribute(f) = m_outside_tag;
-                        }
-                    }
+    for (const Tuple& t : m_mesh.get_all(m_pt_top)) {
+        const simplex::Simplex tet(m_mesh, m_pt_top, t);
+        if (offset_tag_acc.const_scalar_attribute(t) == m_offset_tag) {
+            offset_tag_acc.scalar_attribute(t) = m_outside_tag;
+            tag_accs.at(m_pt_top).scalar_attribute(t) = m_outside_tag;
+            for (const simplex::Simplex& f : simplex::faces(m_mesh, tet)) {
+                if (m_mesh.simplex_is_in_child(input_mesh, f)) {
+                    continue;
                 }
-            });
-    }
+                tag_accs.at(f.primitive_type()).scalar_attribute(f) = m_outside_tag;
+            }
+        }
         //// DEBUG reset bad tet tag
         // if (tag_accs.at(pt_top).const_scalar_attribute(tet) == 3) {
         //     tag_accs.at(pt_top).scalar_attribute(tet) = m_outside_tag;
         // }
+    }
 }
 
 } // namespace wmtk::components

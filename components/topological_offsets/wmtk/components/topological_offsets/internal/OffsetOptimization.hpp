@@ -65,6 +65,16 @@ private:
      */
     void roi_update();
 
+    /**
+     * @brief Greedy-color the offset vertices so that any two vertices whose
+     * parent embedding vertices are equal or share an embedding tet get
+     * different colors. Writes the colors into m_offset_color_handle; this
+     * makes parallel offset smoothing safe (the smoothing lambda temporarily
+     * moves the parent embedding vertex and checks inversions in its
+     * tet-neighborhood).
+     */
+    void color_offset_vertices_by_embedding_adjacency();
+
     std::tuple<Eigen::Vector3d, double, double> compute_offset_normal(const Eigen::Vector3d& p);
     std::tuple<Eigen::Vector2d, double, double> compute_offset_normal(const Eigen::Vector2d& p);
 
@@ -119,6 +129,7 @@ private:
     // vertex color attributes for the coloring-based parallel scheduler
     attribute::MeshAttributeHandle m_embedding_color_handle;
     attribute::MeshAttributeHandle m_offset_color_handle;
+    attribute::MeshAttributeHandle m_embedding_vertex_color_tmp;
 
 
     std::shared_ptr<operations::SingleAttributeTransferStrategy<double, double>>

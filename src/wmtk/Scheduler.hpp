@@ -122,9 +122,20 @@ public:
      * a second time if earlier executions changed their neighborhood).
      */
     SchedulerStats run_operation_on_all_parallel_prefilter(operations::Operation& op);
+    /**
+     * @brief Executes a vertex operation in parallel over independent color
+     * classes.
+     *
+     * @param reuse_existing_colors when true, the colors already stored in
+     * color_handle are used as-is (vertices with color < 0 are skipped). This
+     * allows callers to supply conflict colorings based on meshes other than
+     * the operation's own mesh (e.g. coloring offset-surface vertices by
+     * adjacency of their parents in the embedding mesh).
+     */
     SchedulerStats run_operation_on_all_coloring(
         operations::Operation& op,
-        const TypedAttributeHandle<int64_t>& color_handle);
+        const TypedAttributeHandle<int64_t>& color_handle,
+        bool reuse_existing_colors = false);
 
     const SchedulerStats& stats() const { return m_stats; }
 

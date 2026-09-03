@@ -82,7 +82,18 @@ protected:
     const BaseType& base_type() const { return *this; }
 
 private:
-    internal::AttributeTransactionStack<T>& m_cache_stack;
+    // Resolve the calling thread's scope stack on every access: accessors
+    // (including long-lived ones shared between threads, e.g. TetMesh's
+    // connectivity accessors) must never funnel through another thread's
+    // transaction stack.
+    internal::AttributeTransactionStack<T>& cache_stack()
+    {
+        return this->attribute().get_local_scope_stack();
+    }
+    const internal::AttributeTransactionStack<T>& cache_stack() const
+    {
+        return this->attribute().get_local_scope_stack();
+    }
 };
 } // namespace wmtk::attribute
 #include "CachingAccessor.hxx"

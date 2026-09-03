@@ -61,6 +61,9 @@
 
 #include "utils/write_mesh.hpp"
 
+#include <atomic>
+#include <cstdlib>
+
 
 namespace wmtk::components::internal {
 
@@ -171,6 +174,12 @@ void OffsetOptimization::init_embedding_optimization()
 
     m_embedding_color_handle =
         m_mesh.register_attribute<int64_t>("offset_optimization_sched_color", PrimitiveType::Vertex, 1);
+    m_embedding_vertex_color_tmp = m_mesh.register_attribute<int64_t>(
+        "offset_optimization_emb_color_tmp",
+        PrimitiveType::Vertex,
+        1,
+        false,
+        int64_t(-1));
 
     //////////////////////////////////
     // Region of interest (roi)
@@ -1356,6 +1365,7 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
         {m_embedding_edge_length_attribute,
          m_embedding_amips_attribute,
          m_embedding_color_handle,
+         m_embedding_vertex_color_tmp,
          m_offset_color_handle});
 
     auto add_transfers = [this](operations::Operation& op) {
@@ -1869,8 +1879,15 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
             check_tet_tag_validity();
         }
         // smoothing
+        // Coloring-based parallel smoothing is on by default (TSAN-verified);
+        // set WMTK_NO_SMOOTHING_COLORING to fall back to serial execution.
+        const bool use_coloring = (std::getenv("WMTK_NO_SMOOTHING_COLORING") == nullptr);
         for (int64_t i = 0; i < 5; ++i) {
-            auto stats = scheduler.run_operation_on_all_parallel_prefilter(*smooth);
+            auto stats = use_coloring
+                             ? scheduler.run_operation_on_all_coloring(
+                                   *smooth,
+                                   smooth_color_handle.as<int64_t>())
+                             : scheduler.run_operation_on_all_parallel_prefilter(*smooth);
             pass_stats += stats;
             logger().info(
                 "Executed smooth {}, {} ops (S/F) {}/{}. Time: executing: {}",
@@ -1919,7 +1936,8 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
          m_embedding_amips_attribute,
          m_embedding_roi_attribute,
          m_offset_color_handle,
-         m_embedding_color_handle});
+         m_embedding_color_handle,
+         m_embedding_vertex_color_tmp});
 
     auto add_transfers = [this](operations::Operation& op) {
         // op.add_transfer_strategy(m_offset_position_to_embedding_transfer);
@@ -2183,8 +2201,19 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
         }
 
         // smoothing
+        // Coloring-based parallel smoothing is on by default (TSAN-verified);
+        // set WMTK_NO_SMOOTHING_COLORING to fall back to serial execution.
+        const bool use_coloring = (std::getenv("WMTK_NO_SMOOTHING_COLORING") == nullptr);
+        if (use_coloring) {
+            color_offset_vertices_by_embedding_adjacency();
+        }
         for (int64_t i = 0; i < 5; ++i) {
-            auto stats = scheduler.run_operation_on_all_parallel_prefilter(*smooth);
+            auto stats = use_coloring
+                             ? scheduler.run_operation_on_all_coloring(
+                                   *smooth,
+                                   smooth_color_handle.as<int64_t>(),
+                                   /*reuse_existing_colors=*/true)
+                             : scheduler.run_operation_on_all_parallel_prefilter(*smooth);
             pass_stats += stats;
             logger().info(
                 "Executed smooth {}, {} ops (S/F) {}/{}. Time: executing: {}",
@@ -2276,9 +2305,25 @@ void OffsetOptimization::smooth_all(const int64_t n_iterations)
         SchedulerStats pass_stats;
 
         logger().info("Perform operations.");
+        // Coloring-based parallel smoothing is on by default (TSAN-verified);
+        // set WMTK_NO_SMOOTHING_COLORING to fall back to serial execution.
+        const bool use_coloring = (std::getenv("WMTK_NO_SMOOTHING_COLORING") == nullptr);
+        if (use_coloring) {
+            color_offset_vertices_by_embedding_adjacency();
+        }
         int jj = 0;
         for (auto& op : ops) {
-            auto stats = scheduler.run_operation_on_all_parallel_prefilter(*op);
+            auto stats =
+                use_coloring
+                    ? ((jj == 0)
+                           ? scheduler.run_operation_on_all_coloring(
+                                 *op,
+                                 m_offset_color_handle.as<int64_t>(),
+                                 /*reuse_existing_colors=*/true)
+                           : scheduler.run_operation_on_all_coloring(
+                                 *op,
+                                 m_embedding_color_handle.as<int64_t>()))
+                    : scheduler.run_operation_on_all_parallel_prefilter(*op);
             pass_stats += stats;
             logger().info(
                 "Executed {}, {} ops (S/F) {}/{}. Time: executing: {}",
@@ -2428,6 +2473,63 @@ void OffsetOptimization::set_debug_prints(bool embedding, bool offset, bool smoo
     m_debug_print_embedding = embedding;
     m_debug_print_offset = offset;
     m_debug_print_smooth_all = smooth;
+}
+
+void OffsetOptimization::color_offset_vertices_by_embedding_adjacency()
+{
+    auto emb_color_acc =
+        m_mesh.create_accessor<int64_t>(m_embedding_vertex_color_tmp.as<int64_t>());
+    auto off_color_acc =
+        m_offset_mesh->create_accessor<int64_t>(m_offset_color_handle.as<int64_t>());
+
+    for (const Tuple& t : m_mesh.get_all(PrimitiveType::Vertex)) {
+        emb_color_acc.scalar_attribute(t) = -1;
+    }
+
+    for (const Tuple& vt : m_offset_mesh->get_all(PrimitiveType::Vertex)) {
+        const simplex::Simplex v(*m_offset_mesh, PrimitiveType::Vertex, vt);
+        const simplex::Simplex pv = m_offset_mesh->map_to_parent(v);
+
+        if (pv.primitive_type() != PrimitiveType::Vertex || !m_mesh.is_valid(pv.tuple())) {
+            // cannot be smoothed safely in parallel; the scheduler skips
+            // vertices with negative colors
+            off_color_acc.scalar_attribute(vt) = -1;
+            continue;
+        }
+
+        // used colors: the parent's own color (another offset vertex may map
+        // to the same parent) plus all embedding vertices sharing a tet
+        std::vector<int64_t> used;
+        {
+            const int64_t c_self = emb_color_acc.const_scalar_attribute(pv.tuple());
+            if (c_self >= 0) {
+                used.push_back(c_self);
+            }
+            for (const Tuple& tet_t : simplex::top_dimension_cofaces_tuples(m_mesh, pv)) {
+                const auto vs = simplex::faces_single_dimension_tuples(
+                    m_mesh,
+                    simplex::Simplex(m_mesh, PrimitiveType::Tetrahedron, tet_t),
+                    PrimitiveType::Vertex);
+                for (const Tuple& u : vs) {
+                    const int64_t c = emb_color_acc.const_scalar_attribute(u);
+                    if (c >= 0) {
+                        used.push_back(c);
+                    }
+                }
+            }
+        }
+        std::sort(used.begin(), used.end());
+        int64_t c = 0;
+        for (const int64_t uc : used) {
+            if (c < uc) {
+                break;
+            }
+            c = uc + 1;
+        }
+
+        emb_color_acc.scalar_attribute(pv.tuple()) = c;
+        off_color_acc.scalar_attribute(vt) = c;
+    }
 }
 
 void OffsetOptimization::roi_update()

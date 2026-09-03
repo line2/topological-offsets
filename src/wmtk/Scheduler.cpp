@@ -383,7 +383,8 @@ int64_t first_available_color(std::vector<int64_t>& used_neighbor_coloring)
 
 SchedulerStats Scheduler::run_operation_on_all_coloring(
     operations::Operation& op,
-    const TypedAttributeHandle<int64_t>& color_handle)
+    const TypedAttributeHandle<int64_t>& color_handle,
+    bool reuse_existing_colors)
 {
     // this only works on vertex operations
     SchedulerStats res;
@@ -396,15 +397,8 @@ SchedulerStats Scheduler::run_operation_on_all_coloring(
 
     const auto tups = op.mesh().get_all(type);
     int64_t color_max = -1;
-    {
+    if (!reuse_existing_colors) {
         POLYSOLVE_SCOPED_STOPWATCH("Collecting primitives", res.collecting_time, logger());
-
-
-        // reset all coloring as -1
-        // TODO: parallelfor
-        // for (const auto& v : tups) {
-        //     color_accessor.scalar_attribute(v) = -1;
-        // }
 
         tbb::parallel_for(
             tbb::blocked_range<int64_t>(0, tups.size()),
@@ -441,6 +435,23 @@ SchedulerStats Scheduler::run_operation_on_all_coloring(
 
         logger().info("Have {} colors among {} vertices", colored_simplices.size(), tups.size());
 
+    } else {
+        // bucket vertices by the caller-provided coloring
+        for (const auto& v : tups) {
+            const int64_t c = color_accessor.const_scalar_attribute(v);
+            if (c < 0) {
+                continue;
+            }
+            color_max = std::max(color_max, c);
+            if (c + 1 > (int64_t)colored_simplices.size()) {
+                colored_simplices.resize(c + 1);
+            }
+            colored_simplices[c].push_back(simplex::Simplex::vertex(op.mesh(), v));
+        }
+        logger().info(
+            "Reusing existing coloring: {} colors among {} vertices",
+            colored_simplices.size(),
+            tups.size());
     }
 
     logger().debug("Executing on {} simplices", tups.size());
