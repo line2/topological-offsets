@@ -29,7 +29,10 @@ public:
      */
     int64_t number_of_performed_operations() const { return m_num_op_success + m_num_op_fail; }
 
-    inline double total_time() const { return collecting_time + sorting_time + executing_time; }
+    inline double total_time() const
+    {
+        return collecting_time + sorting_time + prefilter_time + executing_time;
+    }
 
     inline void succeed() { ++m_num_op_success; }
     inline void fail() { ++m_num_op_fail; }
@@ -41,12 +44,14 @@ public:
 
         collecting_time += s.collecting_time;
         sorting_time += s.sorting_time;
+        prefilter_time += s.prefilter_time;
         executing_time += s.executing_time;
     }
 
 
     double collecting_time = 0;
     double sorting_time = 0;
+    double prefilter_time = 0;
     double executing_time = 0;
 
     std::vector<SchedulerStats> sub_stats;
@@ -95,6 +100,18 @@ public:
     SchedulerStats run_operation_on_all(
         operations::Operation& op,
         const TypedAttributeHandle<char>& flag_handle);
+
+    /**
+     * @brief Two-phase variant: parallel read-only prefilter + serial execution.
+     *
+     * Phase 1 evaluates validity and before-invariants for all candidate
+     * simplices concurrently (read-only, mesh must not change). Phase 2
+     * executes the survivors serially in priority order; each executed
+     * operation re-validates against the current mesh state, so results are
+     * consistent with the serial scheduler (some candidates may be rejected
+     * a second time if earlier executions changed their neighborhood).
+     */
+    SchedulerStats run_operation_on_all_parallel_prefilter(operations::Operation& op);
     SchedulerStats run_operation_on_all_coloring(
         operations::Operation& op,
         const TypedAttributeHandle<int64_t>& color_handle);

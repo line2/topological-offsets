@@ -40,6 +40,16 @@ public:
     virtual bool use_random_priority() const { return m_use_random_priority; }
     virtual bool& use_random_priority() { return m_use_random_priority; }
 
+    /**
+     * @brief Thread-safe, read-only pre-check (simplex validity + before-invariants).
+     *
+     * Used by the scheduler's parallel prefilter path. The mesh must not be
+     * mutated while this is called concurrently. A pass here does not
+     * guarantee the operation will succeed later; the executing call
+     * re-validates against the current mesh state.
+     */
+    bool prefilter(const simplex::Simplex& simplex) const;
+
     virtual PrimitiveType primitive_type() const = 0;
 
     const Mesh& mesh() const { return m_mesh; }

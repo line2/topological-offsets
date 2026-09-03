@@ -107,6 +107,110 @@ SchedulerStats Scheduler::run_operation_on_all(operations::Operation& op)
     return res;
 }
 
+SchedulerStats Scheduler::run_operation_on_all_parallel_prefilter(operations::Operation& op)
+{
+    SchedulerStats res;
+    std::vector<simplex::Simplex> simplices;
+
+    const auto type = op.primitive_type();
+    {
+        POLYSOLVE_SCOPED_STOPWATCH("Collecting primitives", res.collecting_time, logger());
+
+        const auto tups = op.mesh().get_all(type);
+        simplices =
+            wmtk::simplex::utils::tuple_vector_to_homogeneous_simplex_vector(op.mesh(), tups, type);
+    }
+
+    logger().debug(
+        "Executing on {} simplices (parallel prefilter)",
+        simplices.size());
+    std::vector<std::pair<int64_t, double>> order;
+
+    {
+        POLYSOLVE_SCOPED_STOPWATCH("Sorting", res.sorting_time, logger());
+        if (op.use_random_priority()) {
+            std::mt19937 gen(utils::get_random_seed());
+
+            std::shuffle(simplices.begin(), simplices.end(), gen);
+        } else {
+            order.reserve(simplices.size());
+            for (int64_t i = 0; i < simplices.size(); ++i) {
+                order.emplace_back(i, op.priority(simplices[i]));
+            }
+
+            std::stable_sort(order.begin(), order.end(), [](const auto& s_a, const auto& s_b) {
+                return s_a.second < s_b.second;
+            });
+        }
+    }
+
+    // Phase 1: parallel read-only prefilter (validity + before-invariants).
+    // The mesh must not be mutated during this phase; each candidate is
+    // re-validated at execution time below.
+    std::vector<char> keep(simplices.size(), 0);
+    {
+        POLYSOLVE_SCOPED_STOPWATCH("Parallel prefilter", res.prefilter_time, logger());
+
+        const int64_t n = simplices.size();
+        if (op.use_random_priority()) {
+            tbb::parallel_for(tbb::blocked_range<int64_t>(0, n), [&](const auto& r) {
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    keep[i] = op.prefilter(simplices[i]) ? char(1) : char(0);
+                }
+            });
+        } else {
+            tbb::parallel_for(tbb::blocked_range<int64_t>(0, n), [&](const auto& r) {
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    const int64_t idx = order[i].first;
+                    keep[idx] = op.prefilter(simplices[idx]) ? char(1) : char(0);
+                }
+            });
+        }
+    }
+
+    // Phase 2: serial execution of the survivors in (priority/random) order.
+    {
+        POLYSOLVE_SCOPED_STOPWATCH("Executing operation", res.executing_time, logger());
+
+        size_t total_simplices = simplices.size();
+
+        if (op.use_random_priority()) {
+            for (int64_t i = 0; i < (int64_t)simplices.size(); ++i) {
+                if (keep[i] == char(0)) {
+                    res.fail();
+                    continue;
+                }
+                log(res, total_simplices);
+                auto mods = op(simplices[i]);
+                if (mods.empty())
+                    res.fail();
+                else
+                    res.succeed();
+            }
+        } else {
+            for (const auto& o : order) {
+                if (keep[o.first] == char(0)) {
+                    res.fail();
+                    continue;
+                }
+                log(res, total_simplices);
+                auto mods = op(simplices[o.first]);
+                if (mods.empty())
+                    res.fail();
+                else
+                    res.succeed();
+            }
+        }
+        if (m_update_frequency) {
+            res.print_update_log(total_simplices);
+        }
+    }
+
+    m_stats += res;
+
+    return res;
+}
+
 SchedulerStats Scheduler::run_operation_on_all(
     operations::Operation& op,
     const TypedAttributeHandle<char>& flag_handle)

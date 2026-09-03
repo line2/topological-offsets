@@ -1835,7 +1835,7 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
         logger().info("Perform operations.");
         int jj = 0;
         for (auto& op : ops) {
-            auto stats = scheduler.run_operation_on_all(*op);
+            auto stats = scheduler.run_operation_on_all_parallel_prefilter(*op);
             pass_stats += stats;
             logger().info(
                 "Executed {}, {} ops (S/F) {}/{}. Time: executing: {}",
@@ -1855,7 +1855,7 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
         }
         // smoothing
         for (int64_t i = 0; i < 5; ++i) {
-            auto stats = scheduler.run_operation_on_all(*smooth);
+            auto stats = scheduler.run_operation_on_all_parallel_prefilter(*smooth);
             pass_stats += stats;
             logger().info(
                 "Executed smooth {}, {} ops (S/F) {}/{}. Time: executing: {}",
@@ -2144,7 +2144,7 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
         logger().info("Perform operations.");
         int jj = 0;
         for (auto& op : ops) {
-            auto stats = scheduler.run_operation_on_all(*op);
+            auto stats = scheduler.run_operation_on_all_parallel_prefilter(*op);
             pass_stats += stats;
             logger().info(
                 "Executed {}, {} ops (S/F) {}/{}. Time: executing: {}",
@@ -2166,7 +2166,7 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
 
         // smoothing
         for (int64_t i = 0; i < 5; ++i) {
-            auto stats = scheduler.run_operation_on_all(*smooth);
+            auto stats = scheduler.run_operation_on_all_parallel_prefilter(*smooth);
             pass_stats += stats;
             logger().info(
                 "Executed smooth {}, {} ops (S/F) {}/{}. Time: executing: {}",
@@ -2260,7 +2260,7 @@ void OffsetOptimization::smooth_all(const int64_t n_iterations)
         logger().info("Perform operations.");
         int jj = 0;
         for (auto& op : ops) {
-            auto stats = scheduler.run_operation_on_all(*op);
+            auto stats = scheduler.run_operation_on_all_parallel_prefilter(*op);
             pass_stats += stats;
             logger().info(
                 "Executed {}, {} ops (S/F) {}/{}. Time: executing: {}",

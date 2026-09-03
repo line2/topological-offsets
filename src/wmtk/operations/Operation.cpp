@@ -94,6 +94,11 @@ std::vector<simplex::Simplex> Operation::operator()(const simplex::Simplex& simp
     return {}; // scope destructor is called
 }
 
+bool Operation::prefilter(const simplex::Simplex& simplex) const
+{
+    return mesh().is_valid(simplex) && before(simplex);
+}
+
 bool Operation::before(const simplex::Simplex& simplex) const
 {
     // const attribute::Accessor<int64_t> accessor = hash_accessor();
