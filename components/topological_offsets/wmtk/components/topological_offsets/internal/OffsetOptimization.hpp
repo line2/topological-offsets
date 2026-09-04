@@ -131,6 +131,16 @@ private:
     attribute::MeshAttributeHandle m_offset_color_handle;
     attribute::MeshAttributeHandle m_embedding_vertex_color_tmp;
 
+    // failure-stamp backoff attributes (see Scheduler::BackoffConfig)
+    attribute::MeshAttributeHandle m_embedding_fail_stamp_handle;
+    attribute::MeshAttributeHandle m_embedding_dirty_epoch_handle;
+    attribute::MeshAttributeHandle m_offset_fail_stamp_handle;
+    attribute::MeshAttributeHandle m_offset_dirty_epoch_handle;
+    int64_t m_backoff_epoch = 1;
+
+    void reset_backoff();
+    void invalidate_backoff_vertices(Mesh& m, const attribute::MeshAttributeHandle& dirty);
+
 
     std::shared_ptr<operations::SingleAttributeTransferStrategy<double, double>>
         m_embedding_edge_length_transfer;

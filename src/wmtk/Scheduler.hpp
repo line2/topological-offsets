@@ -100,6 +100,21 @@ public:
     void print_update_log(size_t total, spdlog::level::level_enum = spdlog::level::info) const;
 };
 
+/**
+ * @brief Configuration for failure-stamp backoff in the parallel prefilter.
+ *
+ * Candidates that fail their before-invariants (except the cheap gate
+ * invariant, e.g. the target-edge-length check) record the current epoch in
+ * fail_stamp_handle. On later passes, such candidates are skipped without
+ * re-evaluation as long as neither endpoint vertex has been marked dirty
+ * (i.e. no operation succeeded in their neighborhood since the failure).
+ */
+struct BackoffConfig {
+    attribute::MeshAttributeHandle fail_stamp_handle; // int64, per edge
+    attribute::MeshAttributeHandle dirty_epoch_handle; // int64, per vertex
+    int64_t epoch = 1;
+};
+
 class Scheduler
 {
 public:
@@ -165,6 +180,18 @@ public:
     int64_t probe_other_fail_count() const { return m_probe_other_fails; }
 
     /**
+     * @brief Enable failure-stamp backoff. Requires a gate invariant to be
+     * set via set_probe_invariant (candidates failing the gate are never
+     * stamped, since gate results can change without any mesh modification).
+     * The epoch is managed by the caller and must advance whenever vertices
+     * move (e.g. after smoothing).
+     */
+    void set_backoff(BackoffConfig cfg) { m_backoff = std::move(cfg); }
+    void clear_backoff() { m_backoff.reset(); }
+    int64_t backoff_skip_count() const { return m_backoff_skips; }
+    int64_t backoff_epoch() const { return m_backoff.has_value() ? m_backoff->epoch : 0; }
+
+    /**
      * @brief Instrumentation: evaluate each probe invariant on all
      * candidates (measurement only, does not change behavior) and count
      * individual failures. Read via probe_detail_counts().
@@ -185,6 +212,8 @@ private:
     int64_t m_probe_other_fails = 0;
     std::vector<std::shared_ptr<invariants::Invariant>> m_probe_invariants;
     std::vector<int64_t> m_probe_detail_counts;
+    std::optional<BackoffConfig> m_backoff;
+    int64_t m_backoff_skips = 0;
 
     void log(const size_t total);
     void log(const SchedulerStats& stats, const size_t total);

@@ -180,6 +180,18 @@ void OffsetOptimization::init_embedding_optimization()
         1,
         false,
         int64_t(-1));
+    m_embedding_fail_stamp_handle = m_mesh.register_attribute<int64_t>(
+        "offset_optimization_fail_stamp",
+        PrimitiveType::Edge,
+        1,
+        false,
+        int64_t(0));
+    m_embedding_dirty_epoch_handle = m_mesh.register_attribute<int64_t>(
+        "offset_optimization_dirty_epoch",
+        PrimitiveType::Vertex,
+        1,
+        false,
+        int64_t(0));
 
     //////////////////////////////////
     // Region of interest (roi)
@@ -406,6 +418,18 @@ void OffsetOptimization::init_offset_optimization()
         "offset_optimization_sched_color",
         PrimitiveType::Vertex,
         1);
+    m_offset_fail_stamp_handle = m_offset_mesh->register_attribute<int64_t>(
+        "offset_optimization_fail_stamp",
+        PrimitiveType::Edge,
+        1,
+        false,
+        int64_t(0));
+    m_offset_dirty_epoch_handle = m_offset_mesh->register_attribute<int64_t>(
+        "offset_optimization_dirty_epoch",
+        PrimitiveType::Vertex,
+        1,
+        false,
+        int64_t(0));
 
     const PrimitiveType pt_face = get_primitive_type_from_id(m_mesh.top_cell_dimension() - 1);
 
@@ -1366,7 +1390,11 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
          m_embedding_amips_attribute,
          m_embedding_color_handle,
          m_embedding_vertex_color_tmp,
-         m_offset_color_handle});
+         m_offset_color_handle,
+         m_embedding_fail_stamp_handle,
+         m_embedding_dirty_epoch_handle,
+         m_offset_fail_stamp_handle,
+         m_offset_dirty_epoch_handle});
 
     auto add_transfers = [this](operations::Operation& op) {
         op.add_transfer_strategy(m_embedding_edge_length_transfer);
@@ -1857,6 +1885,14 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
             m_embedding_todo_larger,
             m_embedding_todo_smaller,
             nullptr};
+        // failure-stamp backoff: opt-in; measurements so far show the skip gains
+        // are offset by the bookkeeping overhead (see commit message)
+        const bool backoff_enabled = (std::getenv("WMTK_ENABLE_BACKOFF") != nullptr);
+        const auto& fail_stamp_handle = m_embedding_fail_stamp_handle;
+        const auto& dirty_epoch_handle = m_embedding_dirty_epoch_handle;
+        // backoff stamps persist across passes and outer loops; the dirty-epoch
+        // mechanism (marks on every successful operation, incl. smoothing)
+        // invalidates exactly the affected candidates
         m_embedding_target_edge_length_transfer->run_on_all();
         // tel_update();
         roi_update();
@@ -1865,10 +1901,22 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
         const bool probe_failures = (std::getenv("WMTK_PROBE_FAILURES") != nullptr);
         int jj = 0;
         for (auto& op : ops) {
-            if (probe_failures && jj < (int)probes.size() && probes[jj]) {
-                scheduler.set_probe_invariant(probes[jj]);
-            }
+            const std::shared_ptr<wmtk::invariants::Invariant> gate =
+                (jj < (int)probes.size()) ? probes[jj] : nullptr;
+            scheduler.set_probe_invariant(gate);
+            // no backoff on the offset mesh: its failures are gate-dominated
+            // (96-99.6% todo-type) and cheap to re-evaluate
+            scheduler.clear_backoff();
             auto stats = scheduler.run_operation_on_all_parallel_prefilter(*op);
+            if (backoff_enabled) {
+                m_backoff_epoch = scheduler.backoff_epoch();
+                if (scheduler.backoff_skip_count() > 0) {
+                    logger().info(
+                        "BACKOFF {}: skipped {} re-evaluations",
+                        ops_name[jj],
+                        scheduler.backoff_skip_count());
+                }
+            }
             if (probe_failures && jj < (int)probes.size() && probes[jj]) {
                 logger().info(
                     "PROBE {}: todo-type fails {} / other fails {} / total {}",
@@ -1898,6 +1946,12 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
         // Coloring-based parallel smoothing is on by default (TSAN-verified);
         // set WMTK_NO_SMOOTHING_COLORING to fall back to serial execution.
         const bool use_coloring = (std::getenv("WMTK_NO_SMOOTHING_COLORING") == nullptr);
+        if (backoff_enabled) {
+            scheduler.set_backoff(
+                BackoffConfig{fail_stamp_handle, dirty_epoch_handle, m_backoff_epoch});
+        } else {
+            scheduler.clear_backoff();
+        }
         for (int64_t i = 0; i < 5; ++i) {
             auto stats = use_coloring
                              ? scheduler.run_operation_on_all_coloring(
@@ -1918,6 +1972,10 @@ void OffsetOptimization::optimize_embedding(const int64_t n_iterations)
                 m_pos_handle,
                 fmt::format("embedding_opt_{}", write_counter++),
                 m_debug_print_embedding);
+        }
+
+        if (backoff_enabled) {
+            m_backoff_epoch = scheduler.backoff_epoch();
         }
 
         m_embedding_edge_length_transfer->run_on_all();
@@ -1953,7 +2011,11 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
          m_embedding_roi_attribute,
          m_offset_color_handle,
          m_embedding_color_handle,
-         m_embedding_vertex_color_tmp});
+         m_embedding_vertex_color_tmp,
+         m_embedding_fail_stamp_handle,
+         m_embedding_dirty_epoch_handle,
+         m_offset_fail_stamp_handle,
+         m_offset_dirty_epoch_handle});
 
     auto add_transfers = [this](operations::Operation& op) {
         // op.add_transfer_strategy(m_offset_position_to_embedding_transfer);
@@ -2195,16 +2257,32 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
             m_offset_todo_larger,
             m_offset_todo_smaller,
             nullptr};
+        // failure-stamp backoff: opt-in; measurements so far show the skip gains
+        // are offset by the bookkeeping overhead (see commit message)
+        const bool backoff_enabled = (std::getenv("WMTK_ENABLE_BACKOFF") != nullptr);
+        const auto& fail_stamp_handle = m_offset_fail_stamp_handle;
+        const auto& dirty_epoch_handle = m_offset_dirty_epoch_handle;
+        // backoff stamps persist across passes and outer loops; the dirty-epoch
+        // mechanism (marks on every successful operation, incl. smoothing)
+        // invalidates exactly the affected candidates
         m_offset_target_edge_length_transfer->run_on_all();
 
         logger().info("Perform operations.");
         const bool probe_failures = (std::getenv("WMTK_PROBE_FAILURES") != nullptr);
         int jj = 0;
         for (auto& op : ops) {
-            if (probe_failures && jj < (int)probes.size() && probes[jj]) {
-                scheduler.set_probe_invariant(probes[jj]);
+            const std::shared_ptr<wmtk::invariants::Invariant> gate =
+                (jj < (int)probes.size()) ? probes[jj] : nullptr;
+            scheduler.set_probe_invariant(gate);
+            // backoff pays off only where expensive non-todo failures repeat:
+            // the embedding collapse and swap_all passes (measured); the
+            // split passes are gate-dominated and offset-mesh passes even more
+            const bool use_backoff_here = backoff_enabled && (jj >= 1);
+            if (use_backoff_here) {
+                scheduler.set_backoff(
+                    BackoffConfig{fail_stamp_handle, dirty_epoch_handle, m_backoff_epoch});
             } else {
-                scheduler.set_probe_invariant(nullptr);
+                scheduler.clear_backoff();
             }
             if (probe_failures && jj == 1) {
                 // detailed per-invariant measurement for the embedding collapse pass
@@ -2221,6 +2299,15 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
                 });
             }
             auto stats = scheduler.run_operation_on_all_parallel_prefilter(*op);
+            if (backoff_enabled) {
+                m_backoff_epoch = scheduler.backoff_epoch();
+                if (scheduler.backoff_skip_count() > 0) {
+                    logger().info(
+                        "BACKOFF {}: skipped {} re-evaluations",
+                        ops_name[jj],
+                        scheduler.backoff_skip_count());
+                }
+            }
             if (probe_failures && jj < (int)probes.size() && probes[jj]) {
                 logger().info(
                     "PROBE {}: todo-type fails {} / other fails {} / total {}",
@@ -2271,6 +2358,12 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
         if (use_coloring) {
             color_offset_vertices_by_embedding_adjacency();
         }
+        if (backoff_enabled) {
+            scheduler.set_backoff(
+                BackoffConfig{fail_stamp_handle, dirty_epoch_handle, m_backoff_epoch});
+        } else {
+            scheduler.clear_backoff();
+        }
         for (int64_t i = 0; i < 5; ++i) {
             auto stats = use_coloring
                              ? scheduler.run_operation_on_all_coloring(
@@ -2291,6 +2384,10 @@ void OffsetOptimization::optimize_offset(const int64_t n_iterations)
                 m_offset_pos_handle,
                 fmt::format("offset_opt_{}", write_counter++),
                 m_debug_print_offset);
+        }
+
+        if (backoff_enabled) {
+            m_backoff_epoch = scheduler.backoff_epoch();
         }
 
         m_offset_edge_length_transfer->run_on_all();
@@ -2375,8 +2472,19 @@ void OffsetOptimization::smooth_all(const int64_t n_iterations)
         if (use_coloring) {
             color_offset_vertices_by_embedding_adjacency();
         }
+        // failure-stamp backoff: opt-in; measurements so far show the skip gains
+        // are offset by the bookkeeping overhead (see commit message)
+        const bool backoff_enabled = (std::getenv("WMTK_ENABLE_BACKOFF") != nullptr);
         int jj = 0;
         for (auto& op : ops) {
+            if (backoff_enabled) {
+                scheduler.set_backoff(BackoffConfig{
+                    (jj == 0) ? m_offset_fail_stamp_handle : m_embedding_fail_stamp_handle,
+                    (jj == 0) ? m_offset_dirty_epoch_handle : m_embedding_dirty_epoch_handle,
+                    m_backoff_epoch});
+            } else {
+                scheduler.clear_backoff();
+            }
             auto stats =
                 use_coloring
                     ? ((jj == 0)
@@ -2397,6 +2505,10 @@ void OffsetOptimization::smooth_all(const int64_t n_iterations)
                 stats.number_of_failed_operations(),
                 stats.executing_time);
             ++jj;
+        }
+
+        if (backoff_enabled) {
+            m_backoff_epoch = scheduler.backoff_epoch();
         }
 
         m_offset_point_to_face_transfer_wout_convergence->run_on_all();
@@ -2537,6 +2649,78 @@ void OffsetOptimization::set_debug_prints(bool embedding, bool offset, bool smoo
     m_debug_print_embedding = embedding;
     m_debug_print_offset = offset;
     m_debug_print_smooth_all = smooth;
+}
+
+void OffsetOptimization::reset_backoff()
+{
+    m_backoff_epoch = 1;
+    // zero stamps AND dirty epochs (stale dirty values from a previous phase
+    // would otherwise defeat the skip condition)
+    {
+        const auto verts = m_mesh.get_all(PrimitiveType::Vertex);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)verts.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto acc =
+                    m_mesh.create_accessor<int64_t>(m_embedding_dirty_epoch_handle.as<int64_t>());
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    acc.scalar_attribute(verts[i]) = 0;
+                }
+            });
+    }
+    {
+        const auto verts = m_offset_mesh->get_all(PrimitiveType::Vertex);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)verts.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto acc =
+                    m_offset_mesh->create_accessor<int64_t>(m_offset_dirty_epoch_handle.as<int64_t>());
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    acc.scalar_attribute(verts[i]) = 0;
+                }
+            });
+    }
+    {
+        const auto edges = m_mesh.get_all(PrimitiveType::Edge);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)edges.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto local_acc =
+                    m_mesh.create_accessor<int64_t>(m_embedding_fail_stamp_handle.as<int64_t>());
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    local_acc.scalar_attribute(edges[i]) = 0;
+                }
+            });
+    }
+    {
+        const auto edges = m_offset_mesh->get_all(PrimitiveType::Edge);
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, (int64_t)edges.size()),
+            [&](const tbb::blocked_range<int64_t>& r) {
+                auto local_acc =
+                    m_offset_mesh->create_accessor<int64_t>(m_offset_fail_stamp_handle.as<int64_t>());
+                for (int64_t i = r.begin(); i < r.end(); ++i) {
+                    local_acc.scalar_attribute(edges[i]) = 0;
+                }
+            });
+    }
+}
+
+void OffsetOptimization::invalidate_backoff_vertices(
+    Mesh& m,
+    const attribute::MeshAttributeHandle& dirty)
+{
+    ++m_backoff_epoch;
+    const int64_t epoch = m_backoff_epoch;
+    const auto verts = m.get_all(PrimitiveType::Vertex);
+    tbb::parallel_for(
+        tbb::blocked_range<int64_t>(0, (int64_t)verts.size()),
+        [&](const tbb::blocked_range<int64_t>& r) {
+            auto acc = m.create_accessor<int64_t>(dirty.as<int64_t>());
+            for (int64_t i = r.begin(); i < r.end(); ++i) {
+                acc.scalar_attribute(verts[i]) = epoch;
+            }
+        });
 }
 
 void OffsetOptimization::color_offset_vertices_by_embedding_adjacency()

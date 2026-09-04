@@ -1,7 +1,9 @@
 #include "Scheduler.hpp"
 
 #include <wmtk/attribute/TypedAttributeHandle.hpp>
+#include <wmtk/simplex/faces_single_dimension.hpp>
 #include <wmtk/simplex/k_ring.hpp>
+#include <wmtk/simplex/top_dimension_cofaces.hpp>
 #include <wmtk/simplex/link.hpp>
 #include <wmtk/simplex/utils/tuple_vector_to_homogeneous_simplex_vector.hpp>
 #include <wmtk/utils/Logger.hpp>
@@ -178,9 +180,50 @@ SchedulerStats Scheduler::run_operation_on_all_parallel_prefilter(operations::Op
                 }
             });
         } else {
-            if (m_probe_invariant) {
-                std::atomic<int64_t> probe_fails{0};
-                std::atomic<int64_t> other_fails{0};
+            const bool gated = (m_probe_invariant != nullptr);
+            const bool backoff = gated && m_backoff.has_value();
+            const int64_t backoff_epoch = backoff ? m_backoff->epoch : 0;
+            std::atomic<int64_t> probe_fails{0};
+            std::atomic<int64_t> other_fails{0};
+            std::atomic<int64_t> backoff_skips{0};
+            if (backoff) {
+                // created once per pass; shared read-only across threads
+                auto stamp_acc =
+                    op.mesh().create_const_accessor<int64_t>(m_backoff->fail_stamp_handle);
+                auto dirty_acc =
+                    op.mesh().create_const_accessor<int64_t>(m_backoff->dirty_epoch_handle);
+                tbb::parallel_for(tbb::blocked_range<int64_t>(0, n), [&](const auto& r) {
+                    for (int64_t i = r.begin(); i < r.end(); ++i) {
+                        const int64_t idx = order[i].first;
+                        if (gated && !m_probe_invariant->before(simplices[idx])) {
+                            ++probe_fails;
+                            keep[idx] = char(0);
+                            continue;
+                        }
+                        const Tuple& t = simplices[idx].tuple();
+                        const int64_t fs = stamp_acc.const_scalar_attribute(t);
+                        if (fs > 0) {
+                            const int64_t d0 = dirty_acc.const_scalar_attribute(t);
+                            const int64_t d1 = dirty_acc.const_scalar_attribute(
+                                op.mesh().switch_tuple(t, PrimitiveType::Vertex));
+                            if (std::max(d0, d1) < fs) {
+                                ++backoff_skips;
+                                keep[idx] = char(0);
+                                continue;
+                            }
+                        }
+                        if (!op.prefilter(simplices[idx])) {
+                            ++other_fails;
+                            keep[idx] = char(0);
+                            auto w_acc =
+                                op.mesh().create_accessor<int64_t>(m_backoff->fail_stamp_handle);
+                            w_acc.scalar_attribute(t) = backoff_epoch;
+                            continue;
+                        }
+                        keep[idx] = char(1);
+                    }
+                });
+            } else if (gated) {
                 tbb::parallel_for(tbb::blocked_range<int64_t>(0, n), [&](const auto& r) {
                     for (int64_t i = r.begin(); i < r.end(); ++i) {
                         const int64_t idx = order[i].first;
@@ -195,8 +238,6 @@ SchedulerStats Scheduler::run_operation_on_all_parallel_prefilter(operations::Op
                         }
                     }
                 });
-                m_probe_fails += probe_fails.load();
-                m_probe_other_fails += other_fails.load();
             } else {
                 tbb::parallel_for(tbb::blocked_range<int64_t>(0, n), [&](const auto& r) {
                     for (int64_t i = r.begin(); i < r.end(); ++i) {
@@ -205,6 +246,9 @@ SchedulerStats Scheduler::run_operation_on_all_parallel_prefilter(operations::Op
                     }
                 });
             }
+            m_probe_fails += probe_fails.load();
+            m_probe_other_fails += other_fails.load();
+            m_backoff_skips += backoff_skips.load();
         }
     }
 
@@ -217,6 +261,33 @@ SchedulerStats Scheduler::run_operation_on_all_parallel_prefilter(operations::Op
         int64_t fails_since_last_success = 0;
         int64_t executed = 0;
         bool early_stopped = false;
+
+        // Mark all vertices incident to a top-dim simplex containing the
+        // operated edge (graph distance <= 1) dirty. This covers the
+        // dependency set of all invariants used here:
+        //  - energy/inversion/ROI invariants depend on the tets around the
+        //    candidate edge, i.e. these vertices' positions;
+        //  - the link condition of a candidate edge changes only when a
+        //    tet containing one of its endpoints is modified, which implies
+        //    the operated edge shared that tet, so the endpoint was marked;
+        //  - moved/created vertices of the operation itself are endpoints of
+        //    the operated edge, hence in the marked set.
+        auto mark_neighborhood_dirty = [&](const simplex::Simplex& s) {
+            if (!m_backoff.has_value()) return;
+            m_backoff->epoch += 1;
+            const int64_t epoch = m_backoff->epoch;
+            auto dirty_acc = op.mesh().create_accessor<int64_t>(m_backoff->dirty_epoch_handle);
+            for (const Tuple& ct : simplex::top_dimension_cofaces_tuples(op.mesh(), s)) {
+                const simplex::Simplex cs(op.mesh(), op.mesh().top_simplex_type(), ct);
+                const auto vs = simplex::faces_single_dimension_tuples(
+                    op.mesh(),
+                    cs,
+                    PrimitiveType::Vertex);
+                for (const Tuple& v : vs) {
+                    dirty_acc.scalar_attribute(v) = epoch;
+                }
+            }
+        };
 
         // Early-stop backoff: only kicks in for passes whose success rate has
         // collapsed (< 5%) and only after a long run of consecutive failures;
@@ -250,6 +321,14 @@ SchedulerStats Scheduler::run_operation_on_all_parallel_prefilter(operations::Op
                 } else {
                     res.succeed();
                     fails_since_last_success = 0;
+                    // the operated simplex itself may no longer exist (e.g.
+                    // after a split); mark the neighborhood of the resulting
+                    // simplices instead
+                    for (const auto& ms : mods) {
+                        if (ms.primitive_type() == op.primitive_type()) {
+                            mark_neighborhood_dirty(ms);
+                        }
+                    }
                 }
             }
         } else {
@@ -275,6 +354,11 @@ SchedulerStats Scheduler::run_operation_on_all_parallel_prefilter(operations::Op
                 } else {
                     res.succeed();
                     fails_since_last_success = 0;
+                    for (const auto& ms : mods) {
+                        if (ms.primitive_type() == op.primitive_type()) {
+                            mark_neighborhood_dirty(ms);
+                        }
+                    }
                 }
             }
         }
@@ -540,6 +624,27 @@ SchedulerStats Scheduler::run_operation_on_all_coloring(
         std::atomic_int suc_cnt = 0;
         std::atomic_int fail_cnt = 0;
 
+        // same dirty-marking logic as the prefilter scheduler: on success,
+        // mark all vertices sharing a top-dim simplex with the modified
+        // simplex so that stamped failures in the neighborhood are
+        // re-evaluated
+        auto mark_dirty_coloring = [&](const simplex::Simplex& s) {
+            if (!m_backoff.has_value()) return;
+            m_backoff->epoch += 1;
+            const int64_t epoch = m_backoff->epoch;
+            auto dirty_acc = op.mesh().create_accessor<int64_t>(m_backoff->dirty_epoch_handle);
+            for (const Tuple& ct : simplex::top_dimension_cofaces_tuples(op.mesh(), s)) {
+                const simplex::Simplex cs(op.mesh(), op.mesh().top_simplex_type(), ct);
+                const auto vs = simplex::faces_single_dimension_tuples(
+                    op.mesh(),
+                    cs,
+                    PrimitiveType::Vertex);
+                for (const Tuple& v : vs) {
+                    dirty_acc.scalar_attribute(v) = epoch;
+                }
+            }
+        };
+
         for (int64_t i = 0; i < colored_simplices.size(); ++i) {
             if (force_serial) {
                 for (int64_t k = 0; k < (int64_t)colored_simplices[i].size(); ++k) {
@@ -548,6 +653,11 @@ SchedulerStats Scheduler::run_operation_on_all_coloring(
                         fail_cnt++;
                     } else {
                         suc_cnt++;
+                        for (const auto& ms : mods) {
+                            if (ms.primitive_type() == op.primitive_type()) {
+                                mark_dirty_coloring(ms);
+                            }
+                        }
                     }
                 }
                 continue;
@@ -561,6 +671,11 @@ SchedulerStats Scheduler::run_operation_on_all_coloring(
                             fail_cnt++;
                         } else {
                             suc_cnt++;
+                            for (const auto& ms : mods) {
+                                if (ms.primitive_type() == op.primitive_type()) {
+                                    mark_dirty_coloring(ms);
+                                }
+                            }
                         }
                     }
                 });
